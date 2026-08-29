@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.matthewelgert.lan-mouse",
+  "name": "Lan Mouse",
+  "version": "0.1.0",
+  "author": "Matthew Elgert",
+  "license": "MIT",
+  "description": "Control and diagnose Lan Mouse from the Omarchy bar.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Lan Mouse",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

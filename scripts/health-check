@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+# TODO: emit structured JSON for package, config, firewall, and PID health.

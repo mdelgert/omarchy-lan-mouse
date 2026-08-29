@@ -1,27 +1,20 @@
-# Local development / Omarchy settings
+# Local settings and runtime data
 .local/
 *.local
 *.user
 
-# QML / Qt tooling
+# Qt / QML tooling
 *.qmlc
 .qmlls.ini
 .qmlproject.user
 .qtc_clangd/
 
-# Build artifacts
-build/
-dist/
-out/
-*.o
-*.so
-
-# Editor files
+# Editors
 .vscode/
 .idea/
 *.swp
 *~
 
-# Generated previews and logs
-preview.local.png
+# Logs and local previews
 *.log
+preview.local.png

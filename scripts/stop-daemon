@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pid_file="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}/omarchy-lan-mouse/lan-mouse.pid"
+[ -f "$pid_file" ] || exit 0
+pid="$(<"$pid_file")"
+
+if kill -0 "$pid" 2>/dev/null && tr '\0' ' ' < "/proc/$pid/cmdline" | grep -Fqx 'lan-mouse daemon '; then
+  kill "$pid"
+fi
+rm -f "$pid_file"
