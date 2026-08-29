@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+# Report package, configuration, firewall, and daemon health as one JSON
+# object on stdout. Read by Panel.qml; safe to run by hand.
+#
+# Usage: health-check [--subnet <CIDR>] [--port <1-65535>]
+#
+# Every probe is read-only and unprivileged. Nothing here prompts, installs,
+# or changes state — the panel polls this on a timer, so it has to be cheap
+# and side-effect free. Exit status is 0 whenever a report was produced; the
+# health of the system is in the payload, not in the exit code.
+
+set -uo pipefail
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib.sh"
+
+subnet="$DEFAULT_SUBNET"
+port="$DEFAULT_PORT"
+settings_ok=true
+settings_detail=""
+
+while (( $# )); do
+  case "$1" in
+    --subnet) subnet="${2:-}"; shift 2 ;;
+    --port)   port="${2:-}";   shift 2 ;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    *) printf 'health-check: unknown argument: %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
+
+# An invalid setting is itself a health problem worth showing, so record it
+# and carry on reporting against the defaults.
+if ! valid_subnet "$subnet"; then
+  settings_ok=false
+  settings_detail="Invalid subnet setting '$subnet'; showing $DEFAULT_SUBNET"
+  subnet="$DEFAULT_SUBNET"
+fi
+if ! valid_port "$port"; then
+  settings_ok=false
+  settings_detail="${settings_detail:+$settings_detail. }Invalid port setting; showing $DEFAULT_PORT"
+  port="$DEFAULT_PORT"
+fi
+
+# ---- Package -----------------------------------------------------------
+
+package_state="missing"
+package_detail="lan-mouse is not installed"
+package_version=""
+
+if lan_mouse_bin="$(command -v lan-mouse 2>/dev/null)" && [[ -n $lan_mouse_bin ]]; then
+  package_state="ok"
+  # `lan-mouse --version` prints the version plus the input-capture and
+  # input-emulation tags on following lines; the first line is the one to show.
+  package_version="$(lan-mouse --version 2>/dev/null | head -n 1 | tr -d '\r')"
+  package_detail="${package_version:-lan-mouse} at $lan_mouse_bin"
+fi
+
+# ---- Configuration -----------------------------------------------------
+
+config_path="$(config_file)"
+config_state="missing"
+config_detail="No config.toml yet — pair a device from the GUI to create one"
+config_fingerprints=0
+
+if [[ -f $config_path ]]; then
+  config_state="ok"
+  # Authorized fingerprints are what makes a config useful, so count them
+  # rather than just reporting that a file exists.
+  config_fingerprints="$(grep -cE '^[[:space:]]*"[0-9a-fA-F:]{16,}"[[:space:]]*=' "$config_path" 2>/dev/null || printf '0')"
+  if (( config_fingerprints > 0 )); then
+    config_detail="$config_fingerprints authorized $( (( config_fingerprints == 1 )) && printf 'fingerprint' || printf 'fingerprints' )"
+  else
+    config_detail="Present, no authorized fingerprints yet"
+  fi
+elif [[ -e $config_path ]]; then
+  config_state="missing"
+  config_detail="$config_path exists but is not a regular file"
+fi
+
+# ---- Firewall ----------------------------------------------------------
+#
+# `ufw status` needs root, and this script must never prompt. Two sources,
+# unprivileged one first:
+#   1. /etc/ufw/user.rules  — the rules ufw compiles from; world-readable by
+#      default on Arch, and it holds the literal iptables line a matching
+#      `ufw allow` produces. Reading it is silent.
+#   2. `sudo -n ufw status` — exact, but only when sudo is already unlocked,
+#      and a refusal writes an auth-log line every time. The panel polls on a
+#      timer, so this is the fallback rather than the first choice: probing
+#      with sudo first meant a "password is required" entry every 30 seconds.
+#   3. neither readable     — report unknown rather than guessing.
+
+firewall_state="absent"
+firewall_detail="ufw is not installed"
+firewall_enabled="null"
+firewall_source="none"
+# The exact line `ufw allow from <subnet> to any port <port> proto udp` writes.
+want_rule="-A ufw-user-input -p udp --dport ${port} -s ${subnet} -j ACCEPT"
+
+if command -v ufw >/dev/null 2>&1; then
+  firewall_state="unknown"
+  firewall_detail="Cannot read ufw rules without authentication"
+
+  if [[ -r /etc/ufw/user.rules ]]; then
+    firewall_source="user.rules"
+    if [[ -r /etc/ufw/ufw.conf ]] && grep -qiE '^ENABLED=yes' /etc/ufw/ufw.conf 2>/dev/null; then
+      firewall_enabled="true"
+    elif [[ -r /etc/ufw/ufw.conf ]]; then
+      firewall_enabled="false"
+    fi
+    # -e so the leading "-A" is read as the pattern and not as an option.
+    if grep -qxF -e "$want_rule" /etc/ufw/user.rules 2>/dev/null; then
+      firewall_state="ok"
+      firewall_detail="Allows udp/${port} from ${subnet}"
+    else
+      firewall_state="missing"
+      firewall_detail="No rule for udp/${port} from ${subnet}"
+    fi
+  elif sudo_status="$(sudo -n ufw status verbose 2>/dev/null)" && [[ -n $sudo_status ]]; then
+    firewall_source="ufw"
+    if grep -qiE '^Status:[[:space:]]*active' <<<"$sudo_status"; then
+      firewall_enabled="true"
+    else
+      firewall_enabled="false"
+    fi
+    # `ufw status` renders the rule as "<port>/udp ALLOW IN <subnet>".
+    if grep -qE "(^|[[:space:]])${port}/udp[[:space:]]+ALLOW" <<<"$sudo_status" \
+       && grep -qF -e "$subnet" <<<"$sudo_status"; then
+      firewall_state="ok"
+      firewall_detail="Allows udp/${port} from ${subnet}"
+    else
+      firewall_state="missing"
+      firewall_detail="No rule for udp/${port} from ${subnet}"
+    fi
+  fi
+
+  # A correct rule behind a disabled firewall is not the same as a working
+  # one, and it is not the same problem as a missing rule either.
+  if [[ $firewall_state == "ok" && $firewall_enabled == "false" ]]; then
+    firewall_state="inactive"
+    firewall_detail="Rule present, but ufw is disabled"
+  fi
+fi
+
+# ---- Daemon ------------------------------------------------------------
+
+daemon_state="stopped"
+daemon_detail="Not started by this plugin"
+daemon_pid=0
+pid_path="$(pid_file)"
+log_path="$(log_file)"
+
+# Daemons this plugin did not start still matter: lan-mouse refuses to run a
+# second instance, so an unmanaged one is why Start would fail. Report it,
+# never touch it.
+foreign_pids=()
+mapfile -t all_daemon_pids < <(lan_mouse_daemon_pids)
+
+if pid="$(tracked_pid)"; then
+  daemon_state="running"
+  daemon_pid="$pid"
+  uptime_detail=""
+  # etimes is seconds since start; nice to show and cheap to read.
+  if elapsed="$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')" && [[ $elapsed =~ ^[0-9]+$ ]]; then
+    if   (( elapsed < 60 ));   then uptime_detail="${elapsed}s"
+    elif (( elapsed < 3600 )); then uptime_detail="$(( elapsed / 60 ))m"
+    else                            uptime_detail="$(( elapsed / 3600 ))h $(( (elapsed % 3600) / 60 ))m"
+    fi
+  fi
+  daemon_detail="Running as PID ${pid}${uptime_detail:+, up $uptime_detail}"
+fi
+
+for other in "${all_daemon_pids[@]}"; do
+  [[ -n $other ]] || continue
+  [[ $other == "$daemon_pid" ]] && continue
+  foreign_pids+=("$other")
+done
+
+if [[ $daemon_state == "running" ]]; then
+  if (( ${#foreign_pids[@]} > 0 )); then
+    daemon_detail="$daemon_detail; also running outside this plugin (PID ${foreign_pids[*]})"
+  fi
+elif (( ${#foreign_pids[@]} > 0 )); then
+  # lan-mouse is up, but it is not ours. Stop deliberately will not reach it.
+  daemon_state="foreign"
+  daemon_detail="Running outside this plugin (PID ${foreign_pids[*]}); Stop only affects daemons started here"
+elif [[ -f $pid_path ]]; then
+  # The file outlived its process. Say so — it is the difference between
+  # "never started" and "died", and Start will clear it.
+  daemon_state="stopped"
+  daemon_detail="Stale PID file; the tracked process is gone"
+fi
+
+foreign_json="[]"
+if (( ${#foreign_pids[@]} > 0 )); then
+  foreign_json="[$(IFS=,; printf '%s' "${foreign_pids[*]}")]"
+fi
+
+log_present=false
+log_size=0
+if [[ -f $log_path ]]; then
+  log_present=true
+  log_size="$(stat -c %s "$log_path" 2>/dev/null || printf '0')"
+fi
+
+# ---- Report ------------------------------------------------------------
+
+cat <<JSON
+{
+  "schema": 1,
+  "subnet": $(json_string "$subnet"),
+  "port": $port,
+  "settingsValid": $settings_ok,
+  "settingsDetail": $(json_string "$settings_detail"),
+  "paths": {
+    "config": $(json_string "$config_path"),
+    "pid": $(json_string "$pid_path"),
+    "log": $(json_string "$log_path")
+  },
+  "package": {
+    "state": $(json_string "$package_state"),
+    "detail": $(json_string "$package_detail"),
+    "version": $(json_string "$package_version")
+  },
+  "config": {
+    "state": $(json_string "$config_state"),
+    "detail": $(json_string "$config_detail"),
+    "fingerprints": ${config_fingerprints:-0}
+  },
+  "firewall": {
+    "state": $(json_string "$firewall_state"),
+    "detail": $(json_string "$firewall_detail"),
+    "enabled": $firewall_enabled,
+    "source": $(json_string "$firewall_source"),
+    "rule": $(json_string "ufw allow from $subnet to any port $port proto udp comment '$UFW_COMMENT'")
+  },
+  "daemon": {
+    "state": $(json_string "$daemon_state"),
+    "detail": $(json_string "$daemon_detail"),
+    "pid": $daemon_pid,
+    "foreignPids": $foreign_json,
+    "logPresent": $log_present,
+    "logSize": $log_size
+  }
+}
+JSON

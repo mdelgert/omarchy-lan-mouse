@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.matthewelgert.lan-mouse",
+  "name": "Lan Mouse",
+  "version": "0.1.0",
+  "author": "Matthew Elgert",
+  "license": "MIT",
+  "description": "Software KVM switch control for the Omarchy bar: install, diagnose, and run the Lan Mouse keyboard and mouse sharing daemon on Hyprland/Wayland.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Lan Mouse",
+    "description": "Share one keyboard and mouse across computers on your LAN. Health checks for package, config, UFW rule, and daemon.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "subnet": "192.168.100.0/24",
+      "port": 4242,
+      "refreshIntervalSec": 30
+    },
+    "schema": [
+      {
+        "key": "subnet",
+        "type": "string",
+        "label": "Allowed subnet (CIDR)",
+        "description": "IPv4 network permitted through the firewall, e.g. 192.168.100.0/24.",
+        "defaultValue": "192.168.100.0/24"
+      },
+      {
+        "key": "port",
+        "type": "integer",
+        "label": "Lan Mouse port",
+        "description": "UDP port the daemon listens on.",
+        "min": 1,
+        "max": 65535,
+        "step": 1,
+        "defaultValue": 4242
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "description": "How often the health check runs while the panel is closed.",
+        "min": 5,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 30
+      }
+    ]
+  },
+  "keywords": [
+    "lan-mouse",
+    "kvm",
+    "keyboard",
+    "mouse",
+    "sharing",
+    "input",
+    "hyprland",
+    "wayland",
+    "wlroots",
+    "synergy",
+    "barrier",
+    "input-leap",
+    "ufw",
+    "network"
+  ]
+}
