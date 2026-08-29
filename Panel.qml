@@ -20,8 +20,8 @@ import "Model.js" as Model
 // the button to anchor against.
 Panel {
   id: root
-  moduleName: "io.github.matthewelgert.lan-mouse"
-  ipcTarget: "io.github.matthewelgert.lan-mouse"
+  moduleName: "io.github.mdelgert.lan-mouse"
+  ipcTarget: "io.github.mdelgert.lan-mouse"
   // The host widget owns the single IpcHandler this target allows, so it can
   // expose start/stop/setup alongside the panel lifecycle methods.
   manageIpc: false

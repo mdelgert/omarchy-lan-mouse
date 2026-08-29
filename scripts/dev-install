@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# Copy this working tree into the Omarchy plugins directory and reload the
+# shell so the changes are actually visible.
+#
+# Usage: scripts/dev-install [--no-restart] [--enable]
+#
+# Why this exists: the shell only ever reads
+# ~/.config/omarchy/plugins/<id>/, never your checkout, so editing the repo
+# does nothing on its own. And while saving there does fire the shell's
+# "plugin changed, reloading" watcher, that does not re-instantiate a bar
+# widget the bar is already holding — BarWidget.qml is mounted once per bar
+# and its bindings and IpcHandler are fixed at instantiation. Only a shell
+# restart picks those up, which is why that is the default here.
+#
+# Deliberately plain `cp` rather than `cp -a`: -a preserves mtimes, and the
+# file watcher never notices a file whose timestamp did not move.
+
+set -uo pipefail
+
+repo_dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+plugins_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins"
+
+restart=1
+enable=0
+
+while (( $# )); do
+  case "$1" in
+    --no-restart) restart=0; shift ;;
+    --enable)     enable=1;  shift ;;
+    -h|--help)    sed -n '2,6p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    *) printf 'dev-install: unknown argument: %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
+
+fail() { printf 'dev-install: %s\n' "$*" >&2; exit 1; }
+
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+[[ -f $repo_dir/manifest.json ]] || fail "no manifest.json in $repo_dir"
+
+id="$(jq -r '.id // empty' "$repo_dir/manifest.json")"
+[[ -n $id ]] || fail "manifest.json has no id"
+# Same shape the shell and the CLI enforce; refuses a traversal via the id.
+[[ $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $id != *..* ]] || fail "invalid plugin id '$id'"
+
+target="$plugins_dir/$id"
+
+# Validate the source before touching the installed copy, so a broken
+# manifest fails here rather than half-way through overwriting a working
+# plugin.
+if command -v omarchy >/dev/null 2>&1; then
+  omarchy plugin validate "$repo_dir" || fail "validation failed; nothing was copied"
+fi
+
+if [[ -L $target ]]; then
+  # A symlinked plugin dir loads but breaks both the file watcher and
+  # `omarchy plugin validate`, so replace it with a real directory.
+  printf 'Replacing symlinked %s with a real directory\n' "$target"
+  rm -f "$target"
+fi
+
+mkdir -p "$target/scripts" || fail "cannot create $target"
+
+# An explicit list, so nothing from the checkout that the plugin does not
+# need (.git, AGENT_TASK.md, editor droppings) lands in the plugins dir.
+cp "$repo_dir"/manifest.json "$repo_dir"/*.qml "$repo_dir"/Model.js "$target"/ || fail "copy failed"
+for optional in README.md LICENSE; do
+  [[ -f $repo_dir/$optional ]] && cp "$repo_dir/$optional" "$target"/
+done
+cp "$repo_dir"/scripts/* "$target"/scripts/ || fail "copy of scripts failed"
+if [[ -d $repo_dir/docs ]]; then
+  mkdir -p "$target/docs"
+  cp "$repo_dir"/docs/* "$target/docs"/ 2>/dev/null
+fi
+
+# The shell runs these directly; a lost +x turns every action into a silent
+# no-op that only shows up as a failed health check.
+chmod +x "$target"/scripts/* 2>/dev/null
+chmod -x "$target"/scripts/lib.sh 2>/dev/null   # sourced, never executed
+
+printf 'Installed %s -> %s\n' "$id" "$target"
+
+if (( enable )) && command -v omarchy >/dev/null 2>&1; then
+  section="$(jq -r '.barWidget.defaultSection // "right"' "$repo_dir/manifest.json")"
+  omarchy plugin enable "$id" --section "$section"
+fi
+
+if (( restart )); then
+  command -v omarchy-restart-shell >/dev/null 2>&1 || fail "omarchy-restart-shell not found"
+  printf 'Restarting the Omarchy shell...\n'
+
+  # Remember which shell is being replaced. omarchy-restart-shell returns
+  # before the outgoing process is gone, and that process answers `ping` on
+  # the way out — so waiting on ping alone reports ready while the old shell
+  # is still serving, and the checks below then race a shell that is dying.
+  old_pid="$(pgrep -f 'quickshell .*-p .*/shell' | head -n 1)"
+
+  # The daemon is setsid-detached, so it is not a child of the shell and
+  # survives this.
+  omarchy-restart-shell >/dev/null 2>&1
+
+  # Ready means a *different* shell process is up, answering IPC, and has
+  # discovered the plugin — anything less and the report would be about the
+  # old one.
+  enabled=""
+  deadline=$(( SECONDS + 30 ))
+  while (( SECONDS < deadline )); do
+    new_pid="$(pgrep -f 'quickshell .*-p .*/shell' | head -n 1)"
+    if [[ -n $new_pid && $new_pid != "$old_pid" ]] \
+       && [[ "$(omarchy-shell shell ping 2>/dev/null)" == "ok" ]]; then
+      enabled="$(omarchy-shell shell listPlugins 2>/dev/null |
+        jq -r --arg id "$id" '.[] | select(.id == $id) | .enabled')"
+      [[ -n $enabled ]] && break
+    fi
+    sleep 0.25
+  done
+
+  if [[ -z $enabled ]]; then
+    printf 'dev-install: shell did not come back with %s loaded within 30s.\n' "$id" >&2
+    printf 'Check: journalctl --user -e | grep -i qml\n' >&2
+    exit 1
+  fi
+  case "$enabled" in
+    true)  printf 'Shell reloaded; %s is enabled.\n' "$id" ;;
+    false) printf 'Shell reloaded; %s is installed but disabled.\n' "$id"
+           printf 'Enable it with: omarchy plugin enable %s --section right\n' "$id" ;;
+    *)     printf 'Shell reloaded, but %s was not discovered.\n' "$id" >&2; exit 1 ;;
+  esac
+else
+  printf 'Skipped the restart. Run omarchy-restart-shell to see the changes.\n'
+fi

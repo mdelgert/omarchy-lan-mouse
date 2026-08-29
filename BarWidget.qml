@@ -14,7 +14,7 @@ import qs.Ui
 // way the built-in clock mirrors its panel's `opened`.
 BarWidget {
   id: root
-  moduleName: "io.github.matthewelgert.lan-mouse"
+  moduleName: "io.github.mdelgert.lan-mouse"
 
   // Nerd Font (Material Design) glyphs, matching the bar's existing
   // on/off pairs such as bluetooth 󰂯/󰂲 and microphone 󰍬/󰍭.
@@ -97,7 +97,7 @@ BarWidget {
   }
 
   IpcHandler {
-    target: "io.github.matthewelgert.lan-mouse"
+    target: "io.github.mdelgert.lan-mouse"
 
     function refresh(): void { root.broadcast("refresh") }
     function open(): void { root.open() }
