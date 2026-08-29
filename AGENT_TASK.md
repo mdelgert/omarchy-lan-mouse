@@ -20,7 +20,7 @@ development guide and clone a built-in widget with a panel as the UI reference.
 6. Provide panel buttons: Refresh, Setup / Repair, Launch GUI, Open Config,
    Open Logs, Start daemon, and Stop daemon.
 7. Start from `omarchy plugin clone omarchy.clock --edit`, then replace the
-   clone identity with `io.github.matthewelgert.lan-mouse` before publishing.
+   clone identity with `io.github.mdelgert.lan-mouse` before publishing.
 
 ## Source references
 

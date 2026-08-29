@@ -84,13 +84,13 @@ handshake never completes across the network.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/matthewelgert/omarchy-lan-mouse.git
-omarchy plugin enable io.github.matthewelgert.lan-mouse --section right
+omarchy plugin add https://github.com/mdelgert/omarchy-lan-mouse.git
+omarchy plugin enable io.github.mdelgert.lan-mouse --section right
 ```
 
 Plugins land disabled so you can read the code before running it. To install
 by hand instead, copy this directory to
-`~/.config/omarchy/plugins/io.github.matthewelgert.lan-mouse/`, then
+`~/.config/omarchy/plugins/io.github.mdelgert.lan-mouse/`, then
 `omarchy-shell shell rescanPlugins`.
 
 ## Uninstall
@@ -100,17 +100,17 @@ by hand instead, copy this directory to
 no button left to stop it with.
 
 ```bash
-omarchy-shell io.github.matthewelgert.lan-mouse stop
+omarchy-shell io.github.mdelgert.lan-mouse stop
 ```
 
 Then either hide it or delete it:
 
 ```bash
 # Keep the files, take it off the bar. Re-enable any time.
-omarchy plugin disable io.github.matthewelgert.lan-mouse
+omarchy plugin disable io.github.mdelgert.lan-mouse
 
 # Or remove it entirely (disables it first, then deletes).
-omarchy plugin remove io.github.matthewelgert.lan-mouse --yes
+omarchy plugin remove io.github.mdelgert.lan-mouse --yes
 ```
 
 A couple of things worth knowing about `remove`:
@@ -118,7 +118,7 @@ A couple of things worth knowing about `remove`:
 - If the plugin is a **git checkout** (the normal `omarchy plugin add` case) the
   directory is deleted outright.
 - If you installed it **by hand**, the directory is *moved* to a hidden backup
-  at `~/.config/omarchy/plugins/.io.github.matthewelgert.lan-mouse.bak.<timestamp>`
+  at `~/.config/omarchy/plugins/.io.github.mdelgert.lan-mouse.bak.<timestamp>`
   rather than deleted. Delete that too if you want it gone.
 
 Widget settings live inline on the bar entry in
@@ -293,14 +293,65 @@ The panel polls every 5 seconds while open so Start and Stop settle visibly.
 ## IPC
 
 ```bash
-omarchy-shell io.github.matthewelgert.lan-mouse status   # one-line summary
-omarchy-shell io.github.matthewelgert.lan-mouse toggle   # show/hide the panel
-omarchy-shell io.github.matthewelgert.lan-mouse start
-omarchy-shell io.github.matthewelgert.lan-mouse stop
-omarchy-shell io.github.matthewelgert.lan-mouse refresh
+omarchy-shell io.github.mdelgert.lan-mouse status   # one-line summary
+omarchy-shell io.github.mdelgert.lan-mouse toggle   # show/hide the panel
+omarchy-shell io.github.mdelgert.lan-mouse start
+omarchy-shell io.github.mdelgert.lan-mouse stop
+omarchy-shell io.github.mdelgert.lan-mouse refresh
 ```
 
 `open`, `close`, `gui`, `config`, `logs`, and `setup` are also available.
+
+## Development
+
+The shell only ever reads `~/.config/omarchy/plugins/<id>/`, never your
+checkout, so editing this repo has no effect on its own. Install and reload in
+one step:
+
+```bash
+scripts/dev-install            # copy + restart the shell
+scripts/dev-install --enable   # ...and add it to the bar if it is not there
+scripts/dev-install --no-restart
+```
+
+It validates the working tree with `omarchy plugin validate` *before* touching
+the installed copy, so a broken manifest leaves the running plugin alone.
+
+**Why a full shell restart rather than the file watcher?** Saving under
+`~/.config/omarchy/plugins/` does fire the shell's "plugin changed, reloading"
+watcher, but that does not re-instantiate a bar widget the bar is already
+holding: `BarWidget.qml` is mounted once per bar, and its bindings and
+`IpcHandler` are fixed at instantiation. `omarchy-shell shell rescanPlugins`
+does not pick those up either. Measured on this plugin:
+
+| Action | Reload event | Change actually applied |
+|--------|--------------|-------------------------|
+| Save in the repo only | no | no |
+| Copy into the plugins dir | yes | no |
+| `omarchy-shell shell rescanPlugins` | — | no |
+| `omarchy-restart-shell` | — | **yes** |
+
+Two things that will waste your time otherwise:
+
+- Use plain `cp`, never `cp -a`. `-a` preserves mtimes, and the watcher never
+  notices a file whose timestamp did not move.
+- Do **not** symlink the plugin directory at your checkout. The shell will load
+  it, but the file watcher does not follow symlinks and
+  `omarchy plugin validate` rejects it outright.
+
+Clearing `~/.cache/quickshell/qmlcache` is not necessary; the restart is
+sufficient. The daemon is `setsid`-detached, so restarting the shell does not
+stop it.
+
+To check the QML the way CI would, point `qmllint` at a directory containing a
+`qs` symlink to the Omarchy shell so its `qs.Ui` / `qs.Commons` imports resolve:
+
+```bash
+mkdir -p /tmp/qmlroot && ln -sfn /usr/share/omarchy/shell /tmp/qmlroot/qs
+qmllint -I /tmp/qmlroot -I /usr/lib/qt6/qml BarWidget.qml Panel.qml
+```
+
+`Model.js` is deliberately Qt-free so it can be exercised under node.
 
 ## Layout
 
@@ -316,6 +367,7 @@ scripts/
   stop-daemon      verified, targeted stop
   setup-repair     the privileged terminal action
   open-logs        tails the daemon log
+  dev-install      dev only: install into the plugins dir and reload
 ```
 
 ## Keywords
