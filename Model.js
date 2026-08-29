@@ -102,7 +102,7 @@ function emptyHealth() {
     package: emptySection("unknown", "Checking..."),
     config: emptySection("unknown", "Checking..."),
     firewall: emptySection("unknown", "Checking..."),
-    daemon: { state: "unknown", detail: "Checking...", pid: 0, foreignPids: [], logPresent: false, logSize: 0 }
+    daemon: { state: "unknown", detail: "Checking...", desired: "off", pid: 0, foreignPids: [], logPresent: false, logSize: 0 }
   }
 }
 
@@ -161,6 +161,10 @@ function parseHealth(raw) {
     daemon: {
       state: String(daemonRaw.state || "unknown"),
       detail: String(daemonRaw.detail || ""),
+      // Anything that is not literally "on" is off. A payload from an older
+      // health-check has no desired field at all, and the safe reading of
+      // "no recorded intent" is that no daemon was asked for.
+      desired: daemonRaw.desired === "on" ? "on" : "off",
       pid: parseInt(daemonRaw.pid, 10) || 0,
       foreignPids: foreign,
       logPresent: daemonRaw.logPresent === true,
@@ -224,6 +228,17 @@ function overallTier(health) {
 
 function daemonRunning(health) {
   return !!(health && health.loaded && health.daemon.state === "running")
+}
+
+// What the switch was last left at, which outlives the session the PID file
+// belongs to. Restore reads this; the panel uses it to explain a daemon that
+// is switched on but not up.
+function daemonDesired(health) {
+  return !!(health && health.loaded && health.daemon.desired === "on")
+}
+
+function restorePending(health) {
+  return daemonDesired(health) && !daemonRunning(health) && !!health && health.package.state === "ok"
 }
 
 // Start is pointless without the package, and lan-mouse refuses to run a

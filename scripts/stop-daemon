@@ -5,12 +5,30 @@
 # recycled PID cannot be signalled by mistake. There is deliberately no
 # `pkill`, no `killall`, and no matching by name: a lan-mouse the user
 # started by hand is not ours to terminate.
+#
+# Stopping also records "off" as the desired state, so the next login leaves
+# the daemon alone. Pass --no-persist to stop this session's daemon without
+# changing that intent.
 
 set -uo pipefail
 
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib.sh"
 
+persist=1
+while (( $# )); do
+  case "$1" in
+    --no-persist) persist=0; shift ;;
+    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    *) printf 'stop-daemon: unknown argument: %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
+
 pid_path="$(pid_file)"
+
+# Recorded before the signal rather than after it. The click is the intent;
+# whether the process then exits cleanly, needs SIGKILL, or refuses outright
+# does not change that the user asked for it to be off.
+(( persist )) && write_desired_state off
 
 if ! pid="$(tracked_pid)"; then
   # Either nothing was started, or the process is already gone. Clearing the

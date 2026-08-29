@@ -90,9 +90,14 @@ fi
 # setsid) would otherwise be orphaned: the process keeps running with no UI
 # and no script left to stop it. Running it from the installed copy while
 # that copy still exists is the last moment this can be done cleanly.
+#
+# --no-persist so this does not count as the user switching Lan Mouse off:
+# a reinstall (which is what this is usually half of) should come back to the
+# state the panel was left in, not to off.
 if (( ! installed_removed )) && [[ -x $target/scripts/stop-daemon ]]; then
   printf 'Stopping the plugin daemon...\n'
-  "$target/scripts/stop-daemon" || printf 'dev-uninstall: stop-daemon reported a problem; continuing\n' >&2
+  "$target/scripts/stop-daemon" --no-persist ||
+    printf 'dev-uninstall: stop-daemon reported a problem; continuing\n' >&2
 fi
 
 # Take it off the bar first, so shell.json does not keep an entry pointing at
