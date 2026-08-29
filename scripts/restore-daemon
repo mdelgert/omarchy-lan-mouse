@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Bring the daemon back to whatever the switch was last left at.
+#
+# The PID file lives in the runtime directory and is gone after a reboot,
+# which is correct — but it means nothing in the session remembers that the
+# user had Lan Mouse switched on. This reads the intent that start-daemon
+# and stop-daemon record and, if it says "on", starts the daemon again.
+#
+# Run at shell startup by Panel.qml, and safe to run by hand or repeatedly:
+# it starts nothing unless the daemon is wanted, absent, and installable.
+#
+# Exit status is the outcome, so the caller can tell the three apart:
+#   0  the daemon was started
+#   10 nothing to do (switched off, already running, not installed, or a
+#      daemon outside this plugin is holding the port)
+#   1  a start was wanted and failed
+
+set -uo pipefail
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib.sh"
+
+script_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+
+case "${1:-}" in
+  -h|--help) sed -n '2,18p' "$0" | sed 's/^# \?//'; exit 0 ;;
+  "") ;;
+  *) printf 'restore-daemon: unknown argument: %s\n' "$1" >&2; exit 2 ;;
+esac
+
+if [[ "$(read_desired_state)" != "on" ]]; then
+  printf 'Lan Mouse is switched off; nothing to restore\n'
+  exit 10
+fi
+
+if pid="$(tracked_pid)"; then
+  printf 'lan-mouse daemon is already running (PID %s)\n' "$pid"
+  exit 10
+fi
+
+if ! command -v lan-mouse >/dev/null 2>&1; then
+  # Not an error to report at login. The package being missing is already a
+  # health row of its own, and the intent stays recorded for when it is back.
+  printf 'lan-mouse is not installed; leaving the recorded state alone\n'
+  exit 10
+fi
+
+# A daemon started outside this plugin holds the port, so starting ours would
+# only fail. health-check already reports that as "foreign"; say nothing more.
+if [[ -n "$(lan_mouse_daemon_pids)" ]]; then
+  printf 'A lan-mouse daemon is running outside this plugin; not starting another\n'
+  exit 10
+fi
+
+# --no-persist because the intent is already "on" — this is acting on the
+# stored answer, not recording a new one.
+# stderr is left to flow through rather than captured: when a start fails,
+# start-daemon writes the reason and a tail of the daemon log there, and the
+# panel reads that back as the error to show.
+if out="$("$script_dir/start-daemon" --no-persist)"; then
+  printf 'Restored: %s\n' "${out#Started }"
+  exit 0
+fi
+
+exit 1

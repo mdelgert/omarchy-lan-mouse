@@ -9,15 +9,46 @@
 # Idempotent. If the recorded PID is a live lan-mouse daemon this exits 0
 # without starting anything, so repeated clicks cannot produce a second
 # daemon fighting for the same port.
+#
+# Starting also records "on" as the desired state, which is what
+# scripts/restore-daemon reads after a reboot. Pass --no-persist to start
+# without changing that — used by nothing here, but it keeps a manual
+# `start-daemon` from rewriting an intent the user set from the panel.
 
 set -uo pipefail
 
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib.sh"
 
+persist=1
+while (( $# )); do
+  case "$1" in
+    --no-persist) persist=0; shift ;;
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    *) printf 'start-daemon: unknown argument: %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
+
 pid_path="$(pid_file)"
 log_path="$(log_file)"
 
+ensure_runtime_dir || { printf 'start-daemon: cannot create %s\n' "$(runtime_dir)" >&2; exit 1; }
+
+# One starter at a time. The bar instantiates a widget per monitor, so a
+# restore at login can fire this twice within milliseconds; without the lock
+# both would pass the tracked_pid check and race to launch a second daemon.
+# Best-effort: a system without flock still works, it just loses the guard.
+#
+# The daemon is launched with 9>&- for this reason: a child inherits the fd,
+# and an inherited fd holds the flock. Without that close, the lock would be
+# held for as long as the daemon runs and every later start would sit out the
+# timeout before giving up on it.
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$(runtime_dir)/start.lock"
+  flock -w 10 9 || printf 'start-daemon: proceeding without the start lock\n' >&2
+fi
+
 if pid="$(tracked_pid)"; then
+  (( persist )) && write_desired_state on
   printf 'lan-mouse daemon is already running (PID %s)\n' "$pid"
   exit 0
 fi
@@ -26,8 +57,6 @@ if ! command -v lan-mouse >/dev/null 2>&1; then
   printf 'start-daemon: lan-mouse is not installed\n' >&2
   exit 1
 fi
-
-ensure_runtime_dir || { printf 'start-daemon: cannot create %s\n' "$(runtime_dir)" >&2; exit 1; }
 
 # Whatever the file pointed at is gone or was never ours; tracked_pid already
 # refused it, so dropping it here only removes a stale record.
@@ -50,12 +79,16 @@ fi
 setsid bash -c '
   printf "%s\n" "$$" > "$1"
   exec lan-mouse daemon >>"$2" 2>&1
-' omarchy-lan-mouse "$pid_path" "$log_path" </dev/null >/dev/null 2>&1 &
+' omarchy-lan-mouse "$pid_path" "$log_path" </dev/null >/dev/null 2>&1 9>&- &
 
 # Wait for the handoff to complete: the PID file written, and the process at
 # that PID actually running `lan-mouse daemon` rather than the launching bash.
 for _ in $(seq 1 40); do
   if pid="$(tracked_pid)"; then
+    # Recorded only once the daemon is confirmed up, so a start that fails
+    # for good (a port permanently in use, say) does not leave behind an
+    # intent that makes every future login retry it.
+    (( persist )) && write_desired_state on
     printf 'Started lan-mouse daemon (PID %s)\n' "$pid"
     exit 0
   fi

@@ -146,6 +146,10 @@ fi
 daemon_state="stopped"
 daemon_detail="Not started by this plugin"
 daemon_pid=0
+# What the switch was last left at, which survives the reboot the PID file
+# does not. Reported so the panel can say a stopped daemon is stopped on
+# purpose rather than pending.
+daemon_desired="$(read_desired_state)"
 pid_path="$(pid_file)"
 log_path="$(log_file)"
 
@@ -188,6 +192,13 @@ elif [[ -f $pid_path ]]; then
   # "never started" and "died", and Start will clear it.
   daemon_state="stopped"
   daemon_detail="Stale PID file; the tracked process is gone"
+fi
+
+# Stopped while the switch says on means a restore has not run yet or did not
+# take. Worth saying outright: the switch in the panel shows the daemon, and
+# without this the disagreement between the two is invisible.
+if [[ $daemon_state == "stopped" && $daemon_desired == "on" ]]; then
+  daemon_detail="Switched on, but not running right now"
 fi
 
 foreign_json="[]"
@@ -236,6 +247,7 @@ cat <<JSON
   "daemon": {
     "state": $(json_string "$daemon_state"),
     "detail": $(json_string "$daemon_detail"),
+    "desired": $(json_string "$daemon_desired"),
     "pid": $daemon_pid,
     "foreignPids": $foreign_json,
     "logPresent": $log_present,

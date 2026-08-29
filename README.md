@@ -201,6 +201,30 @@ A `lan-mouse` you started by hand is therefore *reported* but never touched:
 the Daemon row reads "Running outside this plugin (PID …)" and Stop leaves it
 alone.
 
+### Remembering the switch
+
+The PID file is cleared at logout on purpose, which is exactly why it cannot
+also answer "did the user leave this switched on?". That intent is recorded
+separately, and survives the reboot the PID file does not:
+
+```text
+$XDG_STATE_HOME/omarchy-lan-mouse/daemon-desired    # "on" or "off"
+```
+
+Start writes `on` once the daemon is confirmed up; Stop writes `off` as soon
+as you ask for it, whether or not the process goes quietly. At login the
+panel runs `scripts/restore-daemon`, which starts the daemon again only if
+that file says `on`, nothing is already running, and `lan-mouse` is
+installed. A start that fails because the session is not ready yet is retried
+twice, a few seconds apart.
+
+Nothing is restored while the switch is off, so the plugin never starts a
+daemon you did not ask for. Turn the restore off entirely with the
+`restoreDaemonState` setting; the state is still recorded, just not acted on.
+
+Until the daemon is up, the Daemon row reads "Switched on, but not running
+right now" rather than pretending the switch and the process agree.
+
 ## Health
 
 Four independent checks, each with its own verdict and its own fix:
@@ -287,6 +311,7 @@ Setup > Plugins.
 | `subnet` | `192.168.100.0/24` | IPv4 CIDR allowed through the firewall |
 | `port` | `4242` | UDP port the daemon listens on |
 | `refreshIntervalSec` | `30` | Health poll interval while the panel is closed |
+| `restoreDaemonState` | `true` | Start the daemon at login when the switch was last left on |
 
 The panel polls every 5 seconds while open so Start and Stop settle visibly.
 
@@ -312,7 +337,18 @@ one step:
 scripts/dev-install            # copy + restart the shell
 scripts/dev-install --enable   # ...and add it to the bar if it is not there
 scripts/dev-install --no-restart
+
+scripts/dev-uninstall          # take it off the bar, delete the installed copy, reload
+scripts/dev-uninstall --yes    # skip the confirmation prompt
 ```
+
+`dev-uninstall` is the counterpart, for testing a clean-slate install. It stops
+the daemon first — the plugin's own `stop-daemon`, while that script still
+exists — so removing the files cannot leave an orphaned `lan-mouse daemon` with
+no UI to stop it. Then it disables the plugin, deletes
+`~/.config/omarchy/plugins/<id>/`, and restarts the shell. Your checkout is
+never touched, and `~/.config/lan-mouse/` is left alone so a reinstall does not
+mean re-pairing every device.
 
 It validates the working tree with `omarchy plugin validate` *before* touching
 the installed copy, so a broken manifest leaves the running plugin alone.
@@ -361,13 +397,15 @@ BarWidget.qml      bar icon, IPC target, panel host
 Panel.qml          health rows, actions, keyboard navigation
 Model.js           validation, health parsing, severity — pure, node-testable
 scripts/
-  lib.sh           shared paths, validation, PID verification
+  lib.sh           shared paths, validation, PID verification, desired state
   health-check     read-only JSON health report
   start-daemon     idempotent start
   stop-daemon      verified, targeted stop
+  restore-daemon   start at login if the switch was left on
   setup-repair     the privileged terminal action
   open-logs        tails the daemon log
   dev-install      dev only: install into the plugins dir and reload
+  dev-uninstall    dev only: remove the installed copy and reload
 ```
 
 ## Keywords

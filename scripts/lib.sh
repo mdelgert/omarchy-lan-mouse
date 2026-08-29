@@ -85,7 +85,10 @@ is_tracked_daemon() {
   [[ $owner == "$(id -u)" ]] || return 1
 
   local -a argv=()
-  mapfile -d '' -t argv < "/proc/$pid/cmdline" 2>/dev/null || return 1
+  # stderr redirected first: the shell reports a failed input redirection
+  # before a later 2>/dev/null takes effect, and a process exiting between
+  # the check above and this read is normal, not something to print about.
+  mapfile -d '' -t argv 2>/dev/null < "/proc/$pid/cmdline" || return 1
   (( ${#argv[@]} >= 2 )) || return 1
   [[ ${argv[0]##*/} == "lan-mouse" ]] || return 1
 
@@ -147,5 +150,52 @@ lan_mouse_daemon_pids() {
   for pid in "${candidates[@]}"; do
     is_tracked_daemon "$pid" && printf '%s\n' "$pid"
   done
+  return 0
+}
+
+# ---- Desired state. The PID file lives in the runtime directory, which
+#      systemd clears at logout — by design, so a dead session's PID cannot
+#      be mistaken for a live daemon. That means it cannot also answer "did
+#      the user leave this switched on?", which has to outlive the session.
+#      So intent is recorded separately, under XDG_STATE_HOME, and the two
+#      are read for different questions: the PID file for what *is* running,
+#      this file for what *should* be.
+
+state_dir() {
+  printf '%s/omarchy-lan-mouse\n' "${XDG_STATE_HOME:-$HOME/.local/state}"
+}
+
+desired_state_file() { printf '%s/daemon-desired\n' "$(state_dir)"; }
+
+ensure_state_dir() {
+  local dir
+  dir="$(state_dir)" || return 1
+  mkdir -p "$dir" || return 1
+  chmod 700 "$dir" 2>/dev/null
+  return 0
+}
+
+# Print "on" or "off", never anything else. A missing or unreadable file
+# reads as "off": a user who has never touched the switch has not asked for
+# a daemon, and an unreadable file is not grounds for starting one.
+read_desired_state() {
+  local file value=""
+  file="$(desired_state_file)"
+  if [[ -f $file ]]; then
+    read -r value < "$file" 2>/dev/null || value=""
+  fi
+  [[ $value == "on" ]] && printf 'on\n' || printf 'off\n'
+}
+
+# Written through a temp file and renamed, so a crash mid-write leaves the
+# previous answer rather than a truncated one.
+write_desired_state() {
+  local want="${1:-}" file tmp
+  [[ $want == "on" || $want == "off" ]] || return 1
+  ensure_state_dir || return 1
+  file="$(desired_state_file)"
+  tmp="$file.$$"
+  printf '%s\n' "$want" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$file" 2>/dev/null || { rm -f "$tmp"; return 1; }
   return 0
 }

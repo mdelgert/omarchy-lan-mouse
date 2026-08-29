@@ -46,6 +46,9 @@ Panel {
   readonly property int port: resolved.port
   readonly property bool settingsUsable: resolved.subnetValid && resolved.portValid
   readonly property int refreshIntervalSec: Model.normalizedRefreshSec(setting("refreshIntervalSec", Model.DEFAULT_REFRESH_SEC))
+  // Opt-out for the login restore. The switch state is recorded either way;
+  // this only governs whether the shell acts on it at startup.
+  readonly property bool restoreEnabled: setting("restoreDaemonState", true) !== false
 
   // ---- Health, owned here and mirrored by the bar widget.
   property var health: Model.emptyHealth()
@@ -57,7 +60,7 @@ Panel {
   readonly property bool daemonRunning: Model.daemonRunning(health)
   readonly property string statusLine: Model.statusLine(health)
   readonly property string tooltipText: Model.tooltipText(health)
-  readonly property bool busy: startProc.running || stopProc.running
+  readonly property bool busy: startProc.running || stopProc.running || restoreProc.running
   readonly property bool canStart: Model.canStart(health) && !busy
   readonly property bool canStop: Model.canStop(health) && !busy
 
@@ -193,6 +196,31 @@ Panel {
     else if (root.canStart) root.startDaemon()
   }
 
+  // ---- Login restore ------------------------------------------------------
+  //
+  // The daemon is a child of the graphical session, so it dies with it, and
+  // the PID file it is tracked by lives in the runtime directory the session
+  // takes with it. Neither can carry "the user left this switched on" across
+  // a reboot; scripts/lib.sh records that separately, and this is what acts
+  // on it. The script decides whether anything should happen — the panel
+  // only decides when to ask.
+
+  property int restoreAttempts: 0
+  // A start at login can lose a race with the portal or the Wayland socket
+  // and fail for a reason that is gone seconds later, so a failure is worth
+  // retrying. A limit, because a failure that is not transient (a port held
+  // by something else) must not turn into a loop.
+  readonly property int maxRestoreAttempts: 3
+
+  function restoreDaemonState() {
+    if (!scriptsAvailable || !root.restoreEnabled) return
+    if (root.busy) return
+    if (root.restoreAttempts >= root.maxRestoreAttempts) return
+    root.restoreAttempts += 1
+    restoreProc.command = [script("restore-daemon")]
+    restoreProc.running = true
+  }
+
   // Quoted once for the launcher, which rejoins its arguments with "$*" and
   // hands the result to a single `bash -c`. execArgv passes the argv through
   // without a second round of word splitting, so this is exactly one level
@@ -280,7 +308,13 @@ Panel {
     if (!root.opened) root.cursorActive = false
   }
 
-  Component.onCompleted: root.refresh()
+  Component.onCompleted: {
+    root.refresh()
+    // Delayed rather than immediate: the shell is up well before the portal
+    // the daemon needs, and the first attempt is the one most likely to be
+    // wasted otherwise.
+    restoreTimer.start()
+  }
 
   // ---- Processes ----------------------------------------------------------
 
@@ -342,6 +376,47 @@ Panel {
       }
       actionStatusTimer.restart()
       root.refresh()
+    }
+  }
+
+  Process {
+    id: restoreProc
+    running: false
+    command: []
+    stdout: StdioCollector { id: restoreOut; waitForEnd: true }
+    stderr: StdioCollector { id: restoreErr; waitForEnd: true }
+    onExited: function(exitCode) {
+      // 10 is the script's "nothing to do" — switched off, already running,
+      // not installed. That is the common case at login and says nothing the
+      // health rows do not already say, so it stays silent.
+      if (exitCode === 0) {
+        root.actionStatus = String(restoreOut.text || "").trim() || "Restored the daemon"
+        root.lastError = ""
+        actionStatusTimer.restart()
+      } else if (exitCode === 1) {
+        if (root.restoreAttempts < root.maxRestoreAttempts) {
+          restoreTimer.interval = 15000
+          restoreTimer.restart()
+        } else {
+          var err = String(restoreErr.text || "").trim()
+          root.lastError = (err.split("\n")[0] || "Could not restore the daemon")
+            .replace(/^start-daemon:\s*/, "")
+        }
+      }
+      root.refresh()
+    }
+  }
+
+  Timer {
+    id: restoreTimer
+    interval: 2500
+    repeat: false
+    // Every attempt after the first re-reads health first: if the daemon came
+    // up in the meantime, or the switch was turned off while the retry was
+    // pending, there is nothing left to restore.
+    onTriggered: {
+      if (root.restoreAttempts > 0 && !Model.restorePending(root.health)) return
+      root.restoreDaemonState()
     }
   }
 
