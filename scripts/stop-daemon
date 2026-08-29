@@ -1,11 +1,59 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Stop the lan-mouse daemon this plugin started — and nothing else.
+#
+# The PID is re-verified against /proc immediately before every signal, so a
+# recycled PID cannot be signalled by mistake. There is deliberately no
+# `pkill`, no `killall`, and no matching by name: a lan-mouse the user
+# started by hand is not ours to terminate.
 
-pid_file="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}/omarchy-lan-mouse/lan-mouse.pid"
-[ -f "$pid_file" ] || exit 0
-pid="$(<"$pid_file")"
+set -uo pipefail
 
-if kill -0 "$pid" 2>/dev/null && tr '\0' ' ' < "/proc/$pid/cmdline" | grep -Fqx 'lan-mouse daemon '; then
-  kill "$pid"
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib.sh"
+
+pid_path="$(pid_file)"
+
+if ! pid="$(tracked_pid)"; then
+  # Either nothing was started, or the process is already gone. Clearing the
+  # record is the only thing left to do.
+  if [[ -f $pid_path ]]; then
+    rm -f "$pid_path"
+    printf 'No tracked lan-mouse daemon; cleared stale PID file\n'
+  else
+    printf 'No tracked lan-mouse daemon\n'
+  fi
+  exit 0
 fi
-rm -f "$pid_file"
+
+if ! kill -TERM "$pid" 2>/dev/null; then
+  printf 'stop-daemon: could not signal PID %s\n' "$pid" >&2
+  exit 1
+fi
+
+# Give it five seconds to shut down cleanly. is_tracked_daemon is re-checked
+# each pass: the moment the PID stops being our daemon we are done, whether
+# it exited or the number was reused.
+for _ in $(seq 1 50); do
+  if ! is_tracked_daemon "$pid"; then
+    rm -f "$pid_path"
+    printf 'Stopped lan-mouse daemon (PID %s)\n' "$pid"
+    exit 0
+  fi
+  sleep 0.1
+done
+
+# Still ours and still alive after SIGTERM. Re-verify once more, then insist.
+if is_tracked_daemon "$pid"; then
+  kill -KILL "$pid" 2>/dev/null
+  for _ in $(seq 1 20); do
+    is_tracked_daemon "$pid" || break
+    sleep 0.1
+  done
+fi
+
+if is_tracked_daemon "$pid"; then
+  printf 'stop-daemon: PID %s did not exit\n' "$pid" >&2
+  exit 1
+fi
+
+rm -f "$pid_path"
+printf 'Stopped lan-mouse daemon (PID %s, required SIGKILL)\n' "$pid"

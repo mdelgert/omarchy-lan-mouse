@@ -10,8 +10,43 @@
   "entryPoints": { "barWidget": "BarWidget.qml" },
   "barWidget": {
     "displayName": "Lan Mouse",
+    "description": "Install, diagnose, and control the Lan Mouse daemon from the bar.",
     "category": "System",
     "allowMultiple": false,
-    "defaultSection": "right"
+    "defaultSection": "right",
+    "defaults": {
+      "subnet": "192.168.100.0/24",
+      "port": 4242,
+      "refreshIntervalSec": 30
+    },
+    "schema": [
+      {
+        "key": "subnet",
+        "type": "string",
+        "label": "Allowed subnet (CIDR)",
+        "description": "IPv4 network permitted through the firewall, e.g. 192.168.100.0/24.",
+        "defaultValue": "192.168.100.0/24"
+      },
+      {
+        "key": "port",
+        "type": "integer",
+        "label": "Lan Mouse port",
+        "description": "UDP port the daemon listens on.",
+        "min": 1,
+        "max": 65535,
+        "step": 1,
+        "defaultValue": 4242
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "description": "How often the health check runs while the panel is closed.",
+        "min": 5,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 30
+      }
+    ]
   }
 }

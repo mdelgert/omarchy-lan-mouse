@@ -1,14 +1,73 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Start `lan-mouse daemon` as a child of the active Omarchy/Hyprland user
+# session and record its PID.
+#
+# Deliberately not a systemd service: the daemon needs the graphical
+# session's Wayland socket and portal environment, which it inherits by
+# being launched from the running shell.
+#
+# Idempotent. If the recorded PID is a live lan-mouse daemon this exits 0
+# without starting anything, so repeated clicks cannot produce a second
+# daemon fighting for the same port.
 
-runtime_dir="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}/omarchy-lan-mouse"
-pid_file="$runtime_dir/lan-mouse.pid"
-mkdir -p "$runtime_dir"
+set -uo pipefail
 
-if [ -f "$pid_file" ] && kill -0 "$(<"$pid_file")" 2>/dev/null; then
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib.sh"
+
+pid_path="$(pid_file)"
+log_path="$(log_file)"
+
+if pid="$(tracked_pid)"; then
+  printf 'lan-mouse daemon is already running (PID %s)\n' "$pid"
   exit 0
 fi
 
-rm -f "$pid_file"
-lan-mouse daemon &
-printf '%s\n' "$!" > "$pid_file"
+if ! command -v lan-mouse >/dev/null 2>&1; then
+  printf 'start-daemon: lan-mouse is not installed\n' >&2
+  exit 1
+fi
+
+ensure_runtime_dir || { printf 'start-daemon: cannot create %s\n' "$(runtime_dir)" >&2; exit 1; }
+
+# Whatever the file pointed at is gone or was never ours; tracked_pid already
+# refused it, so dropping it here only removes a stale record.
+rm -f "$pid_path"
+
+# Keep the log bounded. The panel tails it, and an unattended daemon can run
+# for weeks.
+if [[ -f $log_path ]] && (( $(stat -c %s "$log_path" 2>/dev/null || printf '0') > 1048576 )); then
+  mv -f "$log_path" "$log_path.1" 2>/dev/null
+fi
+
+{
+  printf '\n=== omarchy-lan-mouse: starting lan-mouse daemon at %s ===\n' "$(date -Is)"
+} >>"$log_path" 2>/dev/null
+
+# The child writes its own PID and then `exec`s, so the number recorded is
+# the daemon's own — not a wrapper's. Doing it this way (rather than trusting
+# $! from the parent) stays correct whether or not setsid forks, which
+# depends on whether the caller happens to be a process-group leader.
+setsid bash -c '
+  printf "%s\n" "$$" > "$1"
+  exec lan-mouse daemon >>"$2" 2>&1
+' omarchy-lan-mouse "$pid_path" "$log_path" </dev/null >/dev/null 2>&1 &
+
+# Wait for the handoff to complete: the PID file written, and the process at
+# that PID actually running `lan-mouse daemon` rather than the launching bash.
+for _ in $(seq 1 40); do
+  if pid="$(tracked_pid)"; then
+    printf 'Started lan-mouse daemon (PID %s)\n' "$pid"
+    exit 0
+  fi
+  sleep 0.05
+done
+
+# It never came up, or it came up and died immediately (a busy port, a
+# missing portal). Surface why instead of reporting a silent success.
+printf 'start-daemon: lan-mouse daemon did not start\n' >&2
+if [[ -s $log_path ]]; then
+  printf -- '--- last lines of %s ---\n' "$log_path" >&2
+  tail -n 15 "$log_path" >&2
+fi
+rm -f "$pid_path"
+exit 1

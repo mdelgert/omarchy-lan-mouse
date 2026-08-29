@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Install lan-mouse and add the UFW rule it needs. Runs in a visible terminal
+# so the sudo authentication prompt is seen and answered by the user.
+#
+# Usage: setup-repair <subnet-cidr> <port>
+#
+# The only privileged commands this script can run are the three fixed ones
+# below. The subnet and port are the sole inputs, both re-validated here even
+# though the panel already validated them — this script must be safe to run
+# on its own, and a caller is not a trust boundary. Nothing is interpolated
+# into a shell string: the arguments are passed to pacman and ufw as argv.
+
+set -uo pipefail
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib.sh"
+
+subnet="${1:-}"
+port="${2:-}"
+
+if (( $# != 2 )); then
+  printf 'Usage: setup-repair <subnet-cidr> <port>\n' >&2
+  exit 2
+fi
+
+if ! valid_subnet "$subnet"; then
+  printf 'setup-repair: refusing to run — %q is not a valid IPv4 CIDR subnet\n' "$subnet" >&2
+  exit 2
+fi
+
+if ! valid_port "$port"; then
+  printf 'setup-repair: refusing to run — %q is not a valid port (1-65535)\n' "$port" >&2
+  exit 2
+fi
+
+printf 'Lan Mouse setup / repair\n'
+printf '========================\n\n'
+printf 'This will run, as root:\n\n'
+printf '  pacman -S --needed --noconfirm lan-mouse\n'
+printf '  ufw allow from %s to any port %s proto udp comment %s\n' "$subnet" "$port" "'$UFW_COMMENT'"
+printf '  ufw status verbose\n\n'
+printf 'Both steps are safe to repeat: pacman skips an up-to-date package and\n'
+printf 'ufw skips a rule it already has.\n\n'
+
+# Authenticate up front so the prompt is the first thing the user sees,
+# rather than appearing part-way through pacman's output.
+printf 'Authenticating...\n'
+if ! sudo -v; then
+  printf '\nsetup-repair: authentication failed or cancelled; nothing was changed.\n' >&2
+  exit 1
+fi
+printf '\n'
+
+status=0
+
+printf '==> Installing lan-mouse\n'
+if sudo pacman -S --needed --noconfirm lan-mouse; then
+  printf '==> Package step complete\n\n'
+else
+  printf '==> Package step FAILED\n\n' >&2
+  status=1
+fi
+
+if command -v ufw >/dev/null 2>&1; then
+  printf '==> Adding the UFW rule for udp/%s from %s\n' "$port" "$subnet"
+  if sudo ufw allow from "$subnet" to any port "$port" proto udp comment "$UFW_COMMENT"; then
+    printf '==> Firewall rule in place\n\n'
+  else
+    printf '==> Firewall step FAILED\n\n' >&2
+    status=1
+  fi
+
+  printf '==> Current firewall status\n'
+  sudo ufw status verbose
+else
+  printf '==> ufw is not installed; skipping the firewall rule.\n' >&2
+  printf '    Install it with: sudo pacman -S ufw\n' >&2
+  status=1
+fi
+
+printf '\n'
+if (( status == 0 )); then
+  printf 'Done. Close this window and press Refresh in the Lan Mouse panel.\n'
+else
+  printf 'Finished with errors. Review the output above.\n'
+fi
+
+exit "$status"

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Follow the daemon log this plugin captures.
+#
+# There is no systemd unit and therefore no journal to read: start-daemon
+# redirects the daemon's stdout and stderr into this file, so this is where
+# the daemon's own output lives. Runs in a terminal opened by the panel.
+
+set -uo pipefail
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib.sh"
+
+log_path="$(log_file)"
+
+printf 'omarchy-lan-mouse — %s\n' "$log_path"
+
+if pid="$(tracked_pid)"; then
+  printf 'Tracked daemon: PID %s\n' "$pid"
+else
+  printf 'Tracked daemon: not running\n'
+fi
+
+if [[ -f "$log_path.1" ]]; then
+  printf 'Rotated log also available: %s.1\n' "$log_path"
+fi
+
+printf 'Press Ctrl-C to close.\n\n'
+
+if [[ ! -e $log_path ]]; then
+  printf 'No log yet — start the daemon from the Lan Mouse panel to create one.\n'
+  printf 'Waiting for it to appear...\n\n'
+fi
+
+# -F rather than -f so this keeps working across a log rotation, and starts
+# following even when the file does not exist yet.
+exec tail -n 200 -F "$log_path"
