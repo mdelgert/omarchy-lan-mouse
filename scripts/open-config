@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/lan-mouse"
+config_file="$config_dir/config.toml"
+editor="${EDITOR:-nano}"
+
+mkdir -p "$config_dir"
+
+if [[ ! -f "$config_file" ]]; then
+  cat > "$config_file" <<'TOML'
+# Lan Mouse configuration
+# Add peers and fingerprints via the Lan Mouse GUI (`lan-mouse`).
+# This file stores authorized clients and runtime settings.
+TOML
+fi
+
+exec "$editor" "$config_file"

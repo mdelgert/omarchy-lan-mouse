@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+subnet="192.168.100.0/24"
+port="4242"
+
+valid_cidr() {
+  local cidr="$1"
+  [[ "$cidr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]] || return 1
+  local ip="${cidr%/*}"
+  IFS='.' read -r a b c d <<<"$ip"
+  for octet in "$a" "$b" "$c" "$d"; do
+    ((octet >= 0 && octet <= 255)) || return 1
+  done
+}
+
+valid_port() {
+  [[ "$1" =~ ^[0-9]+$ ]] && ((1 <= $1 && $1 <= 65535))
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --subnet)
+      subnet="$2"
+      shift 2
+      ;;
+    --port)
+      port="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+if ! valid_cidr "$subnet"; then
+  printf 'Invalid subnet: %s\n' "$subnet" >&2
+  exit 1
+fi
+if ! valid_port "$port"; then
+  printf 'Invalid port: %s\n' "$port" >&2
+  exit 1
+fi
+
+run_in_terminal() {
+  local cmd="$1"
+  if command -v kitty >/dev/null 2>&1; then
+    exec kitty bash -lc "$cmd"
+  elif command -v alacritty >/dev/null 2>&1; then
+    exec alacritty -e bash -lc "$cmd"
+  elif command -v foot >/dev/null 2>&1; then
+    exec foot bash -lc "$cmd"
+  elif command -v gnome-terminal >/dev/null 2>&1; then
+    exec gnome-terminal -- bash -lc "$cmd"
+  elif command -v konsole >/dev/null 2>&1; then
+    exec konsole -e bash -lc "$cmd"
+  elif command -v xterm >/dev/null 2>&1; then
+    exec xterm -e bash -lc "$cmd"
+  fi
+  return 1
+}
+
+setup_cmd="sudo pacman -S --noconfirm lan-mouse && sudo ufw allow from ${subnet} to any port ${port} proto udp comment 'Lan Mouse'; echo; echo 'Setup complete. Press Enter to close.'; read -r"
+
+if ! run_in_terminal "$setup_cmd"; then
+  printf 'No supported terminal found to run privileged setup.\n' >&2
+  exit 1
+fi

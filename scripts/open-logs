@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cmd="journalctl --user -u lan-mouse.service -f"
+
+if command -v kitty >/dev/null 2>&1; then
+  exec kitty bash -lc "$cmd"
+elif command -v alacritty >/dev/null 2>&1; then
+  exec alacritty -e bash -lc "$cmd"
+elif command -v foot >/dev/null 2>&1; then
+  exec foot bash -lc "$cmd"
+elif command -v gnome-terminal >/dev/null 2>&1; then
+  exec gnome-terminal -- bash -lc "$cmd"
+elif command -v konsole >/dev/null 2>&1; then
+  exec konsole -e bash -lc "$cmd"
+elif command -v xterm >/dev/null 2>&1; then
+  exec xterm -e bash -lc "$cmd"
+fi
+
+printf 'No supported terminal found to open logs.\n' >&2
+exit 1

@@ -1,0 +1,9 @@
+[Unit]
+Description=Lan Mouse daemon
+
+[Service]
+ExecStart=/usr/bin/lan-mouse daemon
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

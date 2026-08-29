@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.matthewelgert.lan-mouse",
+  "name": "Lan Mouse",
+  "version": "1.0.0",
+  "author": "Matthew Elgert",
+  "description": "An Omarchy bar widget for Lan Mouse: install and diagnose the Wayland-friendly LAN keyboard/mouse sharing service, manage its headless daemon, and open its GUI, configuration, and logs.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Lan Mouse",
+    "description": "Install, diagnose, and manage Lan Mouse",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "subnet": "192.168.100.0/24",
+      "port": 4242
+    },
+    "schema": [
+      {
+        "key": "subnet",
+        "type": "string",
+        "label": "Subnet (CIDR)",
+        "description": "Subnet allowed to reach the Lan Mouse UDP port"
+      },
+      {
+        "key": "port",
+        "type": "number",
+        "label": "UDP port",
+        "description": "Lan Mouse UDP listening port"
+      }
+    ]
+  }
+}

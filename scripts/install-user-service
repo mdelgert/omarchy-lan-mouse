@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+
+template="$repo_root/service/lan-mouse.service"
+destination_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+destination="$destination_dir/lan-mouse.service"
+
+mkdir -p "$destination_dir"
+install -m 0644 "$template" "$destination"
+
+systemctl --user daemon-reload
+systemctl --user enable --now lan-mouse.service
+
+echo "Installed user service at $destination"
