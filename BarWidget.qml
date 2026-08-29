@@ -39,7 +39,6 @@ BarWidget {
     if ("settings" in target) target.settings = root.settings
     if ("anchorItem" in target) target.anchorItem = button
     if ("health" in target) target.health = root.health
-    if ("healthChangedExternally" in target) target.healthChangedExternally.connect(root.pushHealth)
   }
 
   Loader {

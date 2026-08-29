@@ -61,7 +61,9 @@ run_in_terminal() {
   return 1
 }
 
-setup_cmd="sudo pacman -S --noconfirm lan-mouse && sudo ufw allow from ${subnet} to any port ${port} proto udp comment 'Lan Mouse'; echo; echo 'Setup complete. Press Enter to close.'; read -r"
+escaped_subnet="$(printf '%q' "$subnet")"
+escaped_port="$(printf '%q' "$port")"
+setup_cmd="LAN_MOUSE_SUBNET=${escaped_subnet} LAN_MOUSE_PORT=${escaped_port} bash -lc 'sudo pacman -S --noconfirm lan-mouse && sudo ufw allow from \"\$LAN_MOUSE_SUBNET\" to any port \"\$LAN_MOUSE_PORT\" proto udp comment \"Lan Mouse\"; echo; echo \"Setup complete. Press Enter to close.\"; read -r'"
 
 if ! run_in_terminal "$setup_cmd"; then
   printf 'No supported terminal found to run privileged setup.\n' >&2

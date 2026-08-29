@@ -109,13 +109,17 @@ Item {
 
   Process {
     id: actionProc
+    property string lastOutput: ""
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: {
-        if (text && text.trim().length > 0) root.errorText = text.trim()
-      }
+      onStreamFinished: actionProc.lastOutput = text ? text.trim() : ""
     }
-    onExited: function() {
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.errorText = actionProc.lastOutput.length > 0 ? actionProc.lastOutput : "Action failed."
+      } else {
+        root.errorText = ""
+      }
       root.refresh()
     }
   }
@@ -219,11 +223,11 @@ Item {
         Button { text: "Launch GUI"; onClicked: Quickshell.execDetached(["lan-mouse"]) }
         Button {
           text: "Open configuration"
-          onClicked: Quickshell.execDetached(["bash", "-lc", root.localPath("scripts/open-config")])
+          onClicked: Quickshell.execDetached([root.localPath("scripts/open-config")])
         }
         Button {
           text: "Open logs"
-          onClicked: Quickshell.execDetached(["bash", "-lc", root.localPath("scripts/open-logs")])
+          onClicked: Quickshell.execDetached([root.localPath("scripts/open-logs")])
         }
       }
 

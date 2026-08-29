@@ -66,8 +66,8 @@ if [[ -f "$config_path" ]]; then
 fi
 
 if command -v ufw >/dev/null 2>&1; then
-  if sudo -n ufw status >/dev/null 2>&1; then
-    status="$(sudo -n ufw status | tr -s ' ')"
+  if status="$(sudo -n ufw status 2>/dev/null)"; then
+    status="$(tr -s ' ' <<<"$status")"
     if grep -Fq "$port/udp" <<<"$status" && grep -Fq "$subnet" <<<"$status"; then
       firewall="ok"
     elif grep -Fq "$port/udp" <<<"$status"; then
