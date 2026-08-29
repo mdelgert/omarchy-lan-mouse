@@ -58,30 +58,61 @@ if [[ -L $target ]]; then
   rm -f "$target"
 fi
 
-mkdir -p "$target/scripts" || fail "cannot create $target"
+mkdir -p "$target" || fail "cannot create $target"
 
-# An explicit list, so nothing from the checkout that the plugin does not
-# need (.git, AGENT_TASK.md, editor droppings) lands in the plugins dir.
-cp "$repo_dir"/manifest.json "$repo_dir"/*.qml "$repo_dir"/Model.js "$target"/ || fail "copy failed"
-for optional in README.md LICENSE; do
-  [[ -f $repo_dir/$optional ]] && cp "$repo_dir/$optional" "$target"/
+# Copy one file, mirroring the source's executable bit. Copying rather than
+# `cp -p` on purpose: the mtime has to move for the shell to notice, but a
+# script that loses +x becomes a silent no-op, so that bit is set explicitly.
+install_file() {
+  local src="$1" dst="$2"
+  cp "$src" "$dst" || fail "copy failed: $src"
+  if [[ -x $src ]]; then chmod +x "$dst"; else chmod -x "$dst"; fi
+}
+
+# An allowlist, so nothing from the checkout that the plugin does not need
+# (.git, PROMPT.md, editor droppings) lands in the plugins dir. Patterns that
+# match nothing are skipped rather than treated as errors, which is what lets
+# one script serve plugins with and without a Model.js.
+shopt -s nullglob
+copied=0
+for src in "$repo_dir"/manifest.json "$repo_dir"/*.qml "$repo_dir"/*.js \
+           "$repo_dir"/README.md "$repo_dir"/LICENSE; do
+  [[ -f $src ]] || continue
+  install_file "$src" "$target/${src##*/}"
+  copied=$(( copied + 1 ))
 done
-cp "$repo_dir"/scripts/* "$target"/scripts/ || fail "copy of scripts failed"
-if [[ -d $repo_dir/docs ]]; then
-  mkdir -p "$target/docs"
-  cp "$repo_dir"/docs/* "$target/docs"/ 2>/dev/null
-fi
 
-# The shell runs these directly; a lost +x turns every action into a silent
-# no-op that only shows up as a failed health check.
-chmod +x "$target"/scripts/* 2>/dev/null
-chmod -x "$target"/scripts/lib.sh 2>/dev/null   # sourced, never executed
+for dir in scripts docs assets; do
+  [[ -d $repo_dir/$dir ]] || continue
+  mkdir -p "$target/$dir" || fail "cannot create $target/$dir"
+  for src in "$repo_dir/$dir"/*; do
+    [[ -f $src ]] || continue
+    install_file "$src" "$target/$dir/${src##*/}"
+    copied=$(( copied + 1 ))
+  done
+done
+shopt -u nullglob
 
-printf 'Installed %s -> %s\n' "$id" "$target"
+(( copied > 0 )) || fail "nothing to install from $repo_dir"
+
+printf 'Installed %s (%d files) -> %s\n' "$id" "$copied" "$target"
 
 if (( enable )) && command -v omarchy >/dev/null 2>&1; then
+  # The running shell only knows the plugins it discovered at its last scan.
+  # On a first install — or any install after dev-uninstall — it has never
+  # seen this id, and `omarchy plugin enable` refuses with "is not known".
+  # Rescan and wait for discovery before asking to enable it.
+  omarchy-shell shell rescanPlugins >/dev/null 2>&1
+  deadline=$(( SECONDS + 10 ))
+  while (( SECONDS < deadline )); do
+    [[ -n "$(omarchy-shell shell listPlugins 2>/dev/null |
+             jq -r --arg id "$id" '.[] | select(.id == $id) | .id')" ]] && break
+    sleep 0.25
+  done
+
   section="$(jq -r '.barWidget.defaultSection // "right"' "$repo_dir/manifest.json")"
-  omarchy plugin enable "$id" --section "$section"
+  omarchy plugin enable "$id" --section "$section" ||
+    printf 'dev-install: could not enable %s\n' "$id" >&2
 fi
 
 if (( restart )); then
@@ -94,8 +125,6 @@ if (( restart )); then
   # is still serving, and the checks below then race a shell that is dying.
   old_pid="$(pgrep -f 'quickshell .*-p .*/shell' | head -n 1)"
 
-  # The daemon is setsid-detached, so it is not a child of the shell and
-  # survives this.
   omarchy-restart-shell >/dev/null 2>&1
 
   # Ready means a *different* shell process is up, answering IPC, and has
@@ -119,11 +148,11 @@ if (( restart )); then
     printf 'Check: journalctl --user -e | grep -i qml\n' >&2
     exit 1
   fi
+
   case "$enabled" in
     true)  printf 'Shell reloaded; %s is enabled.\n' "$id" ;;
     false) printf 'Shell reloaded; %s is installed but disabled.\n' "$id"
            printf 'Enable it with: omarchy plugin enable %s --section right\n' "$id" ;;
-    *)     printf 'Shell reloaded, but %s was not discovered.\n' "$id" >&2; exit 1 ;;
   esac
 else
   printf 'Skipped the restart. Run omarchy-restart-shell to see the changes.\n'

@@ -312,7 +312,18 @@ one step:
 scripts/dev-install            # copy + restart the shell
 scripts/dev-install --enable   # ...and add it to the bar if it is not there
 scripts/dev-install --no-restart
+
+scripts/dev-uninstall          # take it off the bar, delete the installed copy, reload
+scripts/dev-uninstall --yes    # skip the confirmation prompt
 ```
+
+`dev-uninstall` is the counterpart, for testing a clean-slate install. It stops
+the daemon first — the plugin's own `stop-daemon`, while that script still
+exists — so removing the files cannot leave an orphaned `lan-mouse daemon` with
+no UI to stop it. Then it disables the plugin, deletes
+`~/.config/omarchy/plugins/<id>/`, and restarts the shell. Your checkout is
+never touched, and `~/.config/lan-mouse/` is left alone so a reinstall does not
+mean re-pairing every device.
 
 It validates the working tree with `omarchy plugin validate` *before* touching
 the installed copy, so a broken manifest leaves the running plugin alone.
@@ -368,6 +379,7 @@ scripts/
   setup-repair     the privileged terminal action
   open-logs        tails the daemon log
   dev-install      dev only: install into the plugins dir and reload
+  dev-uninstall    dev only: remove the installed copy and reload
 ```
 
 ## Keywords
