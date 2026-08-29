@@ -1,12 +1,85 @@
 # Omarchy Lan Mouse
 
-An Omarchy bar widget for installing, diagnosing, and controlling the
-[Lan Mouse](https://github.com/feschber/lan-mouse) keyboard and mouse-sharing
-daemon from the active Hyprland/Wayland session.
+An [Omarchy](https://omarchy.org) bar widget for installing, diagnosing, and
+controlling [Lan Mouse](https://github.com/feschber/lan-mouse) — a software KVM
+switch that shares one keyboard and mouse across several computers over the
+LAN — from the active Hyprland/Wayland session.
 
 The bar icon says whether the daemon is up. The panel behind it says why not.
 
 ![The panel](docs/panel.png)
+
+## What is Lan Mouse?
+
+Lan Mouse is a **software KVM switch**: one keyboard and one mouse, shared
+across several machines on your local network. Push the pointer off the edge of
+one screen and it appears on the next computer, with keystrokes following it.
+No USB switch, no extra cable, no video sharing — just input.
+
+If you have used **Synergy**, **Barrier**, **Input Leap**, or **Deskflow**, this
+is the same idea. If you have used **Apple Universal Control** between a Mac and
+an iPad, it is that, for Linux. Where Lan Mouse differs is that it was written
+for **Wayland** from the start rather than retrofitted from X11, which is why it
+works on a modern **Hyprland** desktop where the older tools struggle.
+
+It is cross-platform — Linux (Wayland and X11), Windows, and macOS — so a Linux
+laptop can drive a Windows desktop and back again.
+
+**What it is not:** it does not share your screen, your clipboard is not
+included, and it is not remote desktop. It moves input between machines that
+each have their own display.
+
+## How it works on Wayland, wlroots, and Hyprland
+
+Sharing input on Wayland is two separate problems, and Lan Mouse solves them
+with two independent, swappable backends:
+
+**Input capture** — noticing that your pointer hit the edge of the screen and
+taking exclusive hold of the mouse and keyboard. Wayland deliberately forbids
+applications from doing this the way X11 allowed, so it goes through a portal.
+Backends: `input-capture-portal` (the `org.freedesktop.portal.InputCapture`
+XDG desktop portal, backed by **libei**/**libEIS**), `layer-shell` (single-pixel
+edge surfaces via `wlr-layer-shell`), `x11`, and `dummy`.
+
+**Input emulation** — synthesizing that pointer motion and those keystrokes on
+the receiving machine. Backends: `wlroots` (the
+`wlr-virtual-pointer-unstable-v1` and `virtual-keyboard-unstable-v1` protocols),
+`libei`, `xdp` (the freedesktop RemoteDesktop portal), `x11`, and `dummy`.
+
+On a stock Omarchy/Hyprland box the daemon picks:
+
+```text
+[INFO input_capture]   using capture backend: input-capture-portal
+[INFO input_emulation] using emulation backend: wlroots
+```
+
+Capture goes through **`xdg-desktop-portal-hyprland`**, which advertises
+`org.freedesktop.impl.portal.InputCapture` — that package is what makes edge
+capture work on Hyprland, and edge detection silently fails without it.
+Emulation uses Hyprland's **wlroots** virtual-pointer and virtual-keyboard
+protocols directly. The **Firewall** and **Package** rows in this plugin's panel
+check the parts that commonly go wrong; if capture never triggers, confirm
+`xdg-desktop-portal-hyprland` is installed.
+
+Verified here on **Hyprland 0.56.2** with **lan-mouse 0.11.0** and
+**xdg-desktop-portal-hyprland 1.4.1**.
+
+Also supported upstream: **GNOME ≥ 45** and **KDE Plasma ≥ 6.1** (both via
+libei), and most **wlroots** compositors including **Sway ≥ 1.8**, **Hyprland**,
+and **Wayfire**. On X11, Lan Mouse can only *receive* input, not capture it.
+
+### Network and security
+
+Machines talk over **UDP port 4242** by default, encrypted with **DTLS** (via
+WebRTC.rs). Pairing is by **TLS certificate fingerprint**: each machine shows a
+fingerprint like `aa:bb:cc:dd:...`, and you authorize the other end's
+fingerprint before input will cross. Authorized fingerprints live in
+`~/.config/lan-mouse/config.toml` under `[authorized_fingerprints]`, and this
+plugin's **Configuration** health row counts them, so "paired with 1 device" is
+visible at a glance.
+
+That UDP port is also why this plugin manages a UFW rule: without it the
+handshake never completes across the network.
 
 ## Install
 
@@ -19,6 +92,78 @@ Plugins land disabled so you can read the code before running it. To install
 by hand instead, copy this directory to
 `~/.config/omarchy/plugins/io.github.matthewelgert.lan-mouse/`, then
 `omarchy-shell shell rescanPlugins`.
+
+## Uninstall
+
+**Stop the daemon first.** Removing the plugin does not stop it — the daemon is
+`setsid`-detached so it survives the shell, and once the plugin is gone there is
+no button left to stop it with.
+
+```bash
+omarchy-shell io.github.matthewelgert.lan-mouse stop
+```
+
+Then either hide it or delete it:
+
+```bash
+# Keep the files, take it off the bar. Re-enable any time.
+omarchy plugin disable io.github.matthewelgert.lan-mouse
+
+# Or remove it entirely (disables it first, then deletes).
+omarchy plugin remove io.github.matthewelgert.lan-mouse --yes
+```
+
+A couple of things worth knowing about `remove`:
+
+- If the plugin is a **git checkout** (the normal `omarchy plugin add` case) the
+  directory is deleted outright.
+- If you installed it **by hand**, the directory is *moved* to a hidden backup
+  at `~/.config/omarchy/plugins/.io.github.matthewelgert.lan-mouse.bak.<timestamp>`
+  rather than deleted. Delete that too if you want it gone.
+
+Widget settings live inline on the bar entry in
+`~/.config/omarchy/shell.json` and go away with it. The runtime directory
+(`$XDG_RUNTIME_DIR/omarchy-lan-mouse/`, holding the PID file and log) is cleared
+at logout on its own.
+
+### If the daemon was left running
+
+The plugin is gone but the process is not. It is still a plain user process, so:
+
+```bash
+kill "$(cat "$XDG_RUNTIME_DIR/omarchy-lan-mouse/lan-mouse.pid")"
+```
+
+Or just log out — nothing here survives the session.
+
+### Undoing what Setup / Repair changed
+
+Uninstalling the plugin does **not** revert these; they are system state the
+plugin only ever added on your explicit request. Undo them yourself if you are
+done with Lan Mouse:
+
+```bash
+# Remove the firewall rule (same spec as the one that was added, minus the comment).
+sudo ufw delete allow from 192.168.100.0/24 to any port 4242 proto udp
+
+# Or pick it off the numbered list interactively.
+sudo ufw status numbered
+sudo ufw delete <number>
+
+# Remove the package.
+sudo pacman -Rns lan-mouse
+```
+
+Substitute your own `subnet` and `port` if you changed them from the defaults.
+
+Lan Mouse's own configuration in `~/.config/lan-mouse/` belongs to Lan Mouse,
+not to this plugin, and is left alone. It holds your TLS key
+(`lan-mouse.pem`) and the fingerprints you authorized, so removing it means
+re-pairing every device:
+
+```bash
+rm -rf ~/.config/lan-mouse    # only if you are done with Lan Mouse entirely
+```
 
 ## Important architecture decision
 
@@ -172,6 +317,23 @@ scripts/
   setup-repair     the privileged terminal action
   open-logs        tails the daemon log
 ```
+
+## Keywords
+
+Searchable terms for anyone looking for this: omarchy plugin, omarchy bar
+widget, omarchy shell, quickshell widget, lan-mouse, lan mouse, software KVM
+switch, KVM switch software, keyboard and mouse sharing, share mouse between
+computers, share keyboard between computers, mouse sharing Linux, multi-computer
+mouse, Synergy alternative, Barrier alternative, Input Leap alternative, Deskflow
+alternative, open source Universal Control, Hyprland, Hyprland plugin, wlroots,
+Wayland, Wayland input sharing, wlr-virtual-pointer, virtual-keyboard-unstable-v1,
+wlr-layer-shell, libei, libEIS, xdg-desktop-portal, xdg-desktop-portal-hyprland,
+InputCapture portal, RemoteDesktop portal, Arch Linux, Omarchy, UFW, DTLS,
+seamless mouse across monitors, cross-platform mouse sharing.
+
+If you maintain a fork, the matching GitHub repository topics are:
+`omarchy` `omarchy-plugin` `hyprland` `wayland` `wlroots` `quickshell`
+`lan-mouse` `kvm-switch` `input-sharing` `synergy-alternative` `archlinux` `qml`.
 
 ## Credits
 

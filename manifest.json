@@ -5,12 +5,16 @@
   "version": "0.1.0",
   "author": "Matthew Elgert",
   "license": "MIT",
-  "description": "Control and diagnose Lan Mouse from the Omarchy bar.",
-  "kinds": ["bar-widget"],
-  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "description": "Software KVM switch control for the Omarchy bar: install, diagnose, and run the Lan Mouse keyboard and mouse sharing daemon on Hyprland/Wayland.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
   "barWidget": {
     "displayName": "Lan Mouse",
-    "description": "Install, diagnose, and control the Lan Mouse daemon from the bar.",
+    "description": "Share one keyboard and mouse across computers on your LAN. Health checks for package, config, UFW rule, and daemon.",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right",
@@ -48,5 +52,21 @@
         "defaultValue": 30
       }
     ]
-  }
+  },
+  "keywords": [
+    "lan-mouse",
+    "kvm",
+    "keyboard",
+    "mouse",
+    "sharing",
+    "input",
+    "hyprland",
+    "wayland",
+    "wlroots",
+    "synergy",
+    "barrier",
+    "input-leap",
+    "ufw",
+    "network"
+  ]
 }
