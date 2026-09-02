@@ -36,15 +36,42 @@ ensure_runtime_dir || { printf 'start-daemon: cannot create %s\n' "$(runtime_dir
 # One starter at a time. The bar instantiates a widget per monitor, so a
 # restore at login can fire this twice within milliseconds; without the lock
 # both would pass the tracked_pid check and race to launch a second daemon.
-# Best-effort: a system without flock still works, it just loses the guard.
+#
+# This fails closed. A missing flock, a lock file that cannot be opened, and a
+# lock still held when the timeout expires all abort the start rather than
+# proceeding unguarded — the guard is the only thing preventing a second
+# daemon, so continuing without it is not a safe fallback. In the case it was
+# written for, two widgets starting at login, the second caller takes the lock
+# as soon as the first finishes and then exits 0 because the daemon is already
+# running; the timeout only expires when a start is genuinely stuck.
+#
+# The lock lives in the runtime directory, which ensure_runtime_dir has just
+# confirmed is ours, not a symlink, and closed to everyone else — so the file
+# it opens below cannot have been redirected by another user.
 #
 # The daemon is launched with 9>&- for this reason: a child inherits the fd,
 # and an inherited fd holds the flock. Without that close, the lock would be
 # held for as long as the daemon runs and every later start would sit out the
 # timeout before giving up on it.
-if command -v flock >/dev/null 2>&1; then
-  exec 9>"$(runtime_dir)/start.lock"
-  flock -w 10 9 || printf 'start-daemon: proceeding without the start lock\n' >&2
+if ! command -v flock >/dev/null 2>&1; then
+  printf 'start-daemon: flock is required to start safely and was not found\n' >&2
+  exit 1
+fi
+
+lock_path="$(runtime_dir)/start.lock"
+
+# Created through a plain redirection first, under a umask that keeps it
+# private: `exec` makes a non-interactive shell exit outright when its
+# redirection fails, which would skip the message below.
+if ! ( umask 077; : >>"$lock_path" ) 2>/dev/null; then
+  printf 'start-daemon: cannot open the start lock at %s\n' "$lock_path" >&2
+  exit 1
+fi
+
+exec 9>>"$lock_path"
+if ! flock -w 10 9; then
+  printf 'start-daemon: another start is already holding the lock at %s; not starting a second daemon\n' "$lock_path" >&2
+  exit 1
 fi
 
 if pid="$(tracked_pid)"; then
@@ -98,9 +125,11 @@ done
 # It never came up, or it came up and died immediately (a busy port, a
 # missing portal). Surface why instead of reporting a silent success.
 printf 'start-daemon: lan-mouse daemon did not start\n' >&2
-if [[ -s $log_path ]]; then
+# Through log_excerpt rather than a bare tail: the panel collects this whole
+# stream into memory, and the daemon decides how long its own lines are.
+if excerpt="$(log_excerpt "$log_path")"; then
   printf -- '--- last lines of %s ---\n' "$log_path" >&2
-  tail -n 15 "$log_path" >&2
+  printf '%s\n' "$excerpt" >&2
 fi
 rm -f "$pid_path"
 exit 1

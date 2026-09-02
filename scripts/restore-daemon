@@ -57,7 +57,7 @@ fi
 # start-daemon writes the reason and a tail of the daemon log there, and the
 # panel reads that back as the error to show.
 if out="$("$script_dir/start-daemon" --no-persist)"; then
-  printf 'Restored: %s\n' "${out#Started }"
+  printf 'Restored: %s\n' "$(clamp_field "${out#Started }")"
   exit 0
 fi
 

@@ -33,12 +33,96 @@ config_file() {
   printf '%s/lan-mouse/config.toml\n' "${XDG_CONFIG_HOME:-$HOME/.config}"
 }
 
+# ---- Filesystem checks. The plugin's own directories and files are the only
+#      things it will read state from or write state into, and "its own" is
+#      decided by inspecting them rather than by trusting the path.
+
+# True when $1 is a directory this user owns, is not itself a symlink, and is
+# closed to group and other. Anything else is refused rather than used: a
+# directory another user can write into or substitute is not somewhere this
+# plugin can keep a lock or a switch position.
+dir_is_own_private() {
+  local dir="${1:-}" facts raw uid mode
+  [[ -n $dir ]] || return 1
+  [[ -L $dir ]] && return 1
+  # %f is the raw mode in hex. Tested numerically rather than against %F,
+  # whose wording varies with the file ("regular file", "regular empty file").
+  facts="$(stat -c '%f|%u|%a' -- "$dir" 2>/dev/null)" || return 1
+  IFS='|' read -r raw uid mode <<<"$facts"
+  (( (16#$raw & 8#170000) == 8#040000 )) || return 1
+  [[ $uid == "$(id -u)" ]] || return 1
+  (( 8#$mode & 8#077 )) && return 1
+  return 0
+}
+
+# True when the *open descriptor* $1 is a regular file this user owns, with a
+# single link and no write access for anyone else.
+#
+# Opening a pathname follows symlinks, and a name can be replaced between the
+# test and the open. Bash cannot pass O_NOFOLLOW, so nothing here is decided
+# from the name: the redirection is performed first and then judged through
+# /proc/self/fd/<n>, which describes what the open actually landed on. A
+# redirect that arrived via a symlink, at a hardlinked file, or at a file
+# other users can write is rejected at that point, before it is read or
+# written. Callers pass fd 3 — a descriptor a child inherits, so the `stat`
+# below sees the same file the shell opened.
+fd_is_own_private_file() {
+  local fd="${1:-}" facts raw uid mode links
+  [[ $fd =~ ^[0-9]+$ ]] || return 1
+  facts="$(stat -L -c '%f|%u|%a|%h' "/proc/self/fd/$fd" 2>/dev/null)" || return 1
+  IFS='|' read -r raw uid mode links <<<"$facts"
+  (( (16#$raw & 8#170000) == 8#100000 )) || return 1
+  [[ $uid == "$(id -u)" ]] || return 1
+  [[ $links == "1" ]] || return 1
+  (( 8#$mode & 8#022 )) && return 1
+  return 0
+}
+
 ensure_runtime_dir() {
   local dir
   dir="$(runtime_dir)" || return 1
-  mkdir -p "$dir" || return 1
-  chmod 700 "$dir" 2>/dev/null
-  return 0
+  [[ -L $dir ]] && return 1
+  mkdir -p -- "$dir" || return 1
+  chmod 700 -- "$dir" 2>/dev/null
+  dir_is_own_private "$dir"
+}
+
+# ---- Output limits. Panel.qml runs these scripts through a Process with a
+#      StdioCollector and keeps each payload whole in memory, so whatever
+#      reaches stdout or stderr is bounded here, at the producer, rather than
+#      trusted to be short. The daemon log and `lan-mouse --version` are the
+#      two sources whose length this plugin does not control at all.
+
+FIELD_MAX_CHARS=200
+LOG_EXCERPT_LINES=15
+LOG_EXCERPT_COLUMNS=200
+LOG_EXCERPT_BYTES=4096
+
+# Echo $1 shortened to $2 characters (default FIELD_MAX_CHARS), marked when
+# something was cut so a truncated value does not read as a complete one.
+clamp_field() {
+  local s="${1:-}" max="${2:-$FIELD_MAX_CHARS}"
+  if (( ${#s} > max )); then
+    printf '%s...\n' "${s:0:max}"
+  else
+    printf '%s\n' "$s"
+  fi
+}
+
+# A bounded tail of a log file: at most LOG_EXCERPT_LINES lines, each clipped
+# to LOG_EXCERPT_COLUMNS, the result capped at LOG_EXCERPT_BYTES, and C0
+# controls dropped so a daemon log line cannot carry escape sequences into the
+# terminal or the panel. Tab and newline are kept. Returns non-zero when there
+# is nothing to show.
+log_excerpt() {
+  local path="${1:-}" text=""
+  [[ -f $path && -s $path ]] || return 1
+  text="$(tail -n "$LOG_EXCERPT_LINES" -- "$path" 2>/dev/null \
+    | tr -d '\000-\010\013-\037\177' \
+    | cut -c "1-$LOG_EXCERPT_COLUMNS" \
+    | head -c "$LOG_EXCERPT_BYTES")"
+  [[ -n $text ]] || return 1
+  printf '%s\n' "$text"
 }
 
 # ---- Validation. Both predicates are total: they answer for any input and
@@ -160,6 +244,11 @@ lan_mouse_daemon_pids() {
 #      So intent is recorded separately, under XDG_STATE_HOME, and the two
 #      are read for different questions: the PID file for what *is* running,
 #      this file for what *should* be.
+#
+#      Both directions go through fd 3 and fd_is_own_private_file: the file is
+#      opened first and then judged by what the descriptor turned out to be,
+#      so neither a symlink at the path nor a name swapped in mid-operation
+#      decides where this plugin reads its intent from or writes it to.
 
 state_dir() {
   printf '%s/omarchy-lan-mouse\n' "${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -170,32 +259,60 @@ desired_state_file() { printf '%s/daemon-desired\n' "$(state_dir)"; }
 ensure_state_dir() {
   local dir
   dir="$(state_dir)" || return 1
-  mkdir -p "$dir" || return 1
-  chmod 700 "$dir" 2>/dev/null
-  return 0
+  [[ -L $dir ]] && return 1
+  mkdir -p -- "$dir" || return 1
+  chmod 700 -- "$dir" 2>/dev/null
+  dir_is_own_private "$dir"
 }
 
-# Print "on" or "off", never anything else. A missing or unreadable file
-# reads as "off": a user who has never touched the switch has not asked for
-# a daemon, and an unreadable file is not grounds for starting one.
+# Print "on" or "off", never anything else. A missing, unreadable, or
+# unconvincing file reads as "off": a user who has never touched the switch
+# has not asked for a daemon, and a file this plugin cannot vouch for is not
+# grounds for starting one.
+#
+# The mode test allows the wider-but-unwritable permissions an older version
+# of this plugin could leave behind, so an existing switch position survives
+# the upgrade; anything group- or world-writable does not.
 read_desired_state() {
   local file value=""
   file="$(desired_state_file)"
-  if [[ -f $file ]]; then
-    read -r value < "$file" 2>/dev/null || value=""
+  if [[ ! -L $file ]]; then
+    # stderr first: the shell reports a failed input redirection before a
+    # later 2>/dev/null on the same command takes effect, and a missing file
+    # is the ordinary case here, not something to print about.
+    { fd_is_own_private_file 3 && read -r value <&3; } 2>/dev/null 3<"$file" || value=""
   fi
   [[ $value == "on" ]] && printf 'on\n' || printf 'off\n'
 }
 
-# Written through a temp file and renamed, so a crash mid-write leaves the
-# previous answer rather than a truncated one.
+# Write the switch position. Returns non-zero without touching the recorded
+# answer if any step fails, so a write that cannot be made safely leaves the
+# previous answer standing rather than a truncated or unowned file.
 write_desired_state() {
-  local want="${1:-}" file tmp
+  local want="${1:-}" dir file tmp
   [[ $want == "on" || $want == "off" ]] || return 1
   ensure_state_dir || return 1
+  dir="$(state_dir)"
   file="$(desired_state_file)"
-  tmp="$file.$$"
-  printf '%s\n' "$want" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
-  mv -f "$tmp" "$file" 2>/dev/null || { rm -f "$tmp"; return 1; }
+
+  # mktemp under umask 077: the name is unpredictable, so it cannot be
+  # pre-planted as a symlink, and the file is created O_EXCL and mode 600 so
+  # no other user can open it. This replaces a temp path derived from the PID,
+  # which was guessable by anyone who could see the process list.
+  tmp="$(umask 077; mktemp -- "$dir/.daemon-desired.XXXXXXXXXX" 2>/dev/null)" || return 1
+  [[ -n $tmp ]] || return 1
+
+  if ! { fd_is_own_private_file 3 && printf '%s\n' "$want" >&3; } 2>/dev/null 3>"$tmp"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+
+  # rename(2) replaces a symlink at the destination rather than following it,
+  # and is atomic, so the switch reads as either the old answer or the new one
+  # and never as a half-written file.
+  if ! mv -f -- "$tmp" "$file" 2>/dev/null; then
+    rm -f -- "$tmp"
+    return 1
+  fi
   return 0
 }

@@ -13,6 +13,12 @@ set -uo pipefail
 
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib.sh"
 
+# At most this many foreign PIDs are named in the report. The list is however
+# long the process table makes it, and Panel.qml holds the whole payload in
+# memory, so it is bounded here rather than passed on at whatever length it
+# happens to arrive.
+FOREIGN_PID_MAX=8
+
 subnet="$DEFAULT_SUBNET"
 port="$DEFAULT_PORT"
 settings_ok=true
@@ -31,7 +37,9 @@ done
 # and carry on reporting against the defaults.
 if ! valid_subnet "$subnet"; then
   settings_ok=false
-  settings_detail="Invalid subnet setting '$subnet'; showing $DEFAULT_SUBNET"
+  # The rejected value is echoed back so the user can see their typo, and
+  # clamped because it arrives from shell.json at whatever length it likes.
+  settings_detail="Invalid subnet setting '$(clamp_field "$subnet" 64)'; showing $DEFAULT_SUBNET"
   subnet="$DEFAULT_SUBNET"
 fi
 if ! valid_port "$port"; then
@@ -50,8 +58,11 @@ if lan_mouse_bin="$(command -v lan-mouse 2>/dev/null)" && [[ -n $lan_mouse_bin ]
   package_state="ok"
   # `lan-mouse --version` prints the version plus the input-capture and
   # input-emulation tags on following lines; the first line is the one to show.
-  package_version="$(lan-mouse --version 2>/dev/null | head -n 1 | tr -d '\r')"
-  package_detail="${package_version:-lan-mouse} at $lan_mouse_bin"
+  # Bounded twice over: `head -c` stops the read itself from pulling in a
+  # large first line, clamp_field settles the field the panel is handed.
+  package_version="$(lan-mouse --version 2>/dev/null | head -n 1 | head -c 512 | tr -d '\r')"
+  package_version="$(clamp_field "$package_version")"
+  package_detail="${package_version:-lan-mouse} at $(clamp_field "$lan_mouse_bin")"
 fi
 
 # ---- Configuration -----------------------------------------------------
@@ -73,7 +84,7 @@ if [[ -f $config_path ]]; then
   fi
 elif [[ -e $config_path ]]; then
   config_state="missing"
-  config_detail="$config_path exists but is not a regular file"
+  config_detail="$(clamp_field "$config_path") exists but is not a regular file"
 fi
 
 # ---- Firewall ----------------------------------------------------------
@@ -179,14 +190,22 @@ for other in "${all_daemon_pids[@]}"; do
   foreign_pids+=("$other")
 done
 
+# Named PIDs are capped, and the remainder counted rather than listed, so a
+# machine somehow running dozens of daemons produces a report of the same size
+# as one running two.
+foreign_shown=("${foreign_pids[@]:0:FOREIGN_PID_MAX}")
+foreign_text="${foreign_shown[*]}"
+foreign_extra=$(( ${#foreign_pids[@]} - ${#foreign_shown[@]} ))
+(( foreign_extra > 0 )) && foreign_text="$foreign_text and $foreign_extra more"
+
 if [[ $daemon_state == "running" ]]; then
   if (( ${#foreign_pids[@]} > 0 )); then
-    daemon_detail="$daemon_detail; also running outside this plugin (PID ${foreign_pids[*]})"
+    daemon_detail="$daemon_detail; also running outside this plugin (PID ${foreign_text})"
   fi
 elif (( ${#foreign_pids[@]} > 0 )); then
   # lan-mouse is up, but it is not ours. Stop deliberately will not reach it.
   daemon_state="foreign"
-  daemon_detail="Running outside this plugin (PID ${foreign_pids[*]}); Stop only affects daemons started here"
+  daemon_detail="Running outside this plugin (PID ${foreign_text}); Stop only affects daemons started here"
 elif [[ -f $pid_path ]]; then
   # The file outlived its process. Say so — it is the difference between
   # "never started" and "died", and Start will clear it.
@@ -202,8 +221,8 @@ if [[ $daemon_state == "stopped" && $daemon_desired == "on" ]]; then
 fi
 
 foreign_json="[]"
-if (( ${#foreign_pids[@]} > 0 )); then
-  foreign_json="[$(IFS=,; printf '%s' "${foreign_pids[*]}")]"
+if (( ${#foreign_shown[@]} > 0 )); then
+  foreign_json="[$(IFS=,; printf '%s' "${foreign_shown[*]}")]"
 fi
 
 log_present=false
@@ -221,7 +240,7 @@ cat <<JSON
   "subnet": $(json_string "$subnet"),
   "port": $port,
   "settingsValid": $settings_ok,
-  "settingsDetail": $(json_string "$settings_detail"),
+  "settingsDetail": $(json_string "$(clamp_field "$settings_detail")"),
   "paths": {
     "config": $(json_string "$config_path"),
     "pid": $(json_string "$pid_path"),
