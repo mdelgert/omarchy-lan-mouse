@@ -192,6 +192,17 @@ session can never be mistaken for a live daemon.
 `lan-mouse daemon` before launching anything, so repeated clicks cannot
 produce two daemons fighting over the same port.
 
+**Start is serialized, and fails closed.** The bar instantiates a widget per
+monitor, so a restore at login can fire two starts within milliseconds; a
+`flock` on `$XDG_RUNTIME_DIR/omarchy-lan-mouse/start.lock` means only one gets
+past the check above. If `flock` is missing, the lock file cannot be opened,
+or the lock is still held when the ten-second timeout expires, the start is
+abandoned with a message rather than run unguarded — the lock is the only
+thing standing between two widgets and two daemons, so proceeding without it
+is not a safe fallback. In the ordinary case the second caller simply waits,
+takes the lock when the first finishes, and reports that the daemon is
+already running.
+
 **Stop is targeted.** It re-verifies the PID against `/proc` immediately
 before every signal — command name, arguments, and owning UID — then sends
 SIGTERM, waits, and escalates to SIGKILL only if needed. There is deliberately
@@ -210,6 +221,16 @@ separately, and survives the reboot the PID file does not:
 ```text
 $XDG_STATE_HOME/omarchy-lan-mouse/daemon-desired    # "on" or "off"
 ```
+
+That file is written to a temporary file with an unpredictable name, created
+`O_EXCL` under `umask 077`, and renamed into place. Both directions open the
+file first and then judge the *descriptor* — a regular file you own, with a
+single link, that no one else can write — rather than trusting the path,
+because a name can be replaced between the check and the open. A symlink at
+that path, a hardlinked file, or a state directory that is not yours and
+private is refused: the write fails without disturbing the previous answer,
+and the read falls back to `off` rather than following it. The directory
+itself is created `0700` and verified.
 
 Start writes `on` once the daemon is confirmed up; Stop writes `off` as soon
 as you ask for it, whether or not the process goes quietly. At login the
@@ -239,6 +260,14 @@ Four independent checks, each with its own verdict and its own fix:
 `scripts/health-check` emits this as one JSON object and is safe to run by
 hand. Every probe is read-only and unprivileged — the panel polls it on a
 timer, so it never prompts, installs, or changes state.
+
+Its output is bounded where it is produced. The panel collects each script's
+stdout and stderr whole into memory, and three of the values come from places
+the plugin does not control — your `shell.json` settings, `lan-mouse
+--version`, and the daemon's own log — so each is clipped to a fixed length
+before it is reported, the list of untracked PIDs is capped with the rest
+counted, and the log excerpt shown when a start fails is limited by line, by
+column, and by total bytes, with control characters removed.
 
 Reading UFW normally needs root. Rather than prompt on a timer, the check
 tries `sudo -n ufw status` (exact, but only when sudo is already unlocked),
