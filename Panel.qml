@@ -147,8 +147,10 @@ Panel {
   // Summoning by hotkey moves no pointer, so a hover the bar was still
   // holding must not keep the center indicators revealed behind the panel.
   function setCenterHoverRevealSuppressed(value) {
-    if (root.bar && "centerHoverRevealSuppressed" in root.bar)
-      root.bar.centerHoverRevealSuppressed = value
+    // Third-party plugins receive a read-only PluginBarApi facade here.
+    // Trying to mutate centerHoverRevealSuppressed throws, and that prevents
+    // close() from hiding the popup. The suppression is only cosmetic, so
+    // leave it alone when running through the facade.
   }
 
   // ---- Health -------------------------------------------------------------
