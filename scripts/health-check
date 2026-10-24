@@ -33,14 +33,18 @@ while (( $# )); do
   esac
 done
 
-# An invalid setting is itself a health problem worth showing, so record it
-# and carry on reporting against the defaults.
-if ! valid_subnet "$subnet"; then
+if [[ $subnet == "auto" ]]; then
+  if ! subnet="$(detect_subnet)"; then
+    settings_ok=false
+    settings_detail="Cannot determine a unique LAN subnet; set an explicit IPv4 CIDR in plugin settings"
+    subnet=""
+  fi
+elif ! valid_subnet "$subnet"; then
   settings_ok=false
   # The rejected value is echoed back so the user can see their typo, and
   # clamped because it arrives from shell.json at whatever length it likes.
-  settings_detail="Invalid subnet setting '$(clamp_field "$subnet" 64)'; showing $DEFAULT_SUBNET"
-  subnet="$DEFAULT_SUBNET"
+  settings_detail="Invalid subnet setting '$(clamp_field "$subnet" 64)'; use auto or an IPv4 CIDR"
+  subnet=""
 fi
 if ! valid_port "$port"; then
   settings_ok=false
@@ -76,7 +80,11 @@ if [[ -f $config_path ]]; then
   config_state="ok"
   # Authorized fingerprints are what makes a config useful, so count them
   # rather than just reporting that a file exists.
-  config_fingerprints="$(grep -cE '^[[:space:]]*"[0-9a-fA-F:]{16,}"[[:space:]]*=' "$config_path" 2>/dev/null || printf '0')"
+  # grep -c already prints 0 when no lines match, then exits 1. Appending
+  # another 0 on that exit produced "0\n0" and invalidated the whole JSON
+  # report. TOML also permits unquoted fingerprint keys.
+  config_fingerprints="$(grep -cE '^[[:space:]]*"?[0-9a-fA-F:]{16,}"?[[:space:]]*=' "$config_path" 2>/dev/null || :)"
+  config_fingerprints="${config_fingerprints:-0}"
   if (( config_fingerprints > 0 )); then
     config_detail="$config_fingerprints authorized $( (( config_fingerprints == 1 )) && printf 'fingerprint' || printf 'fingerprints' )"
   else
@@ -150,6 +158,11 @@ if command -v ufw >/dev/null 2>&1; then
     firewall_state="inactive"
     firewall_detail="Rule present, but ufw is disabled"
   fi
+fi
+
+if [[ -z $subnet ]]; then
+  firewall_state="unknown"
+  firewall_detail="Set a valid LAN subnet before checking or adding a firewall rule"
 fi
 
 # ---- Daemon ------------------------------------------------------------

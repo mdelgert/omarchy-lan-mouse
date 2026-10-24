@@ -19,7 +19,7 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "subnet": "192.168.100.0/24",
+      "subnet": "auto",
       "port": 4242,
       "refreshIntervalSec": 30,
       "restoreDaemonState": true
@@ -29,8 +29,8 @@
         "key": "subnet",
         "type": "string",
         "label": "Allowed subnet (CIDR)",
-        "description": "IPv4 network permitted through the firewall, e.g. 192.168.100.0/24.",
-        "defaultValue": "192.168.100.0/24"
+        "description": "Use auto to detect the LAN on the default-route interface, or specify an IPv4 CIDR such as 192.168.1.0/24.",
+        "defaultValue": "auto"
       },
       {
         "key": "port",

@@ -337,12 +337,16 @@ Setup > Plugins.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `subnet` | `192.168.100.0/24` | IPv4 CIDR allowed through the firewall |
+| `subnet` | `auto` | Detect the connected LAN on the default-route interface, or specify an IPv4 CIDR |
 | `port` | `4242` | UDP port the daemon listens on |
 | `refreshIntervalSec` | `30` | Health poll interval while the panel is closed |
 | `restoreDaemonState` | `true` | Start the daemon at login when the switch was last left on |
 
 The panel polls every 5 seconds while open so Start and Stop settle visibly.
+
+Automatic subnet detection excludes unrelated interfaces such as Docker bridges.
+If no unique connected network is found, Setup / Repair stays disabled until
+you set an explicit CIDR. Explicit subnet settings are preserved.
 
 ## IPC
 
