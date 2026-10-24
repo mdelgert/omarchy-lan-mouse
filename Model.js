@@ -10,7 +10,7 @@
 // across the terminal launcher; scripts/lib.sh re-validates because a caller
 // is not a trust boundary.
 
-var DEFAULT_SUBNET = "192.168.100.0/24"
+var DEFAULT_SUBNET = "auto"
 var DEFAULT_PORT = 4242
 var DEFAULT_REFRESH_SEC = 30
 
@@ -55,11 +55,13 @@ function normalizedRefreshSec(value) {
 
 // The settings actually in force, plus whether the stored ones were usable.
 // The panel shows the fallback notice; it never silently substitutes.
-function resolvedSettings(subnetSetting, portSetting) {
+function resolvedSettings(subnetSetting, portSetting, detectedSubnet) {
+  var automatic = String(subnetSetting).trim() === "auto"
+  var subnet = automatic ? detectedSubnet : subnetSetting
   return {
-    subnet: normalizedSubnet(subnetSetting),
+    subnet: isValidSubnet(subnet) ? String(subnet).trim() : "",
     port: normalizedPort(portSetting),
-    subnetValid: isValidSubnet(subnetSetting),
+    subnetValid: isValidSubnet(subnet),
     portValid: isValidPort(portSetting)
   }
 }
@@ -94,7 +96,7 @@ function emptyHealth() {
   return {
     schema: 0,
     loaded: false,
-    subnet: DEFAULT_SUBNET,
+    subnet: "",
     port: DEFAULT_PORT,
     settingsValid: true,
     settingsDetail: "",
@@ -146,7 +148,7 @@ function parseHealth(raw) {
   return {
     schema: parseInt(data.schema, 10) || 0,
     loaded: true,
-    subnet: String(data.subnet || DEFAULT_SUBNET),
+    subnet: String(data.subnet || ""),
     port: parseInt(data.port, 10) || DEFAULT_PORT,
     settingsValid: data.settingsValid !== false,
     settingsDetail: String(data.settingsDetail || ""),
@@ -282,5 +284,6 @@ function versionLabel(health) {
 // The fixed command the Setup / Repair terminal will run, shown to the user
 // before they trigger it. Built from validated values only.
 function ufwRuleText(subnet, port) {
+  if (!isValidSubnet(subnet) || !isValidPort(port)) return ""
   return "ufw allow from " + normalizedSubnet(subnet) + " to any port " + normalizedPort(port) + " proto udp"
 }

@@ -39,9 +39,9 @@ Panel {
   // ---- Settings. resolvedSettings reports both the usable value and
   //      whether the stored one was legal, so an invalid entry can be shown
   //      rather than silently replaced by the default.
+  readonly property string subnetSetting: String(setting("subnet", Model.DEFAULT_SUBNET)).trim()
   readonly property var resolved: Model.resolvedSettings(
-    setting("subnet", Model.DEFAULT_SUBNET),
-    setting("port", Model.DEFAULT_PORT))
+    subnetSetting, setting("port", Model.DEFAULT_PORT), health.subnet)
   readonly property string subnet: resolved.subnet
   readonly property int port: resolved.port
   readonly property bool settingsUsable: resolved.subnetValid && resolved.portValid
@@ -147,7 +147,9 @@ Panel {
   // Summoning by hotkey moves no pointer, so a hover the bar was still
   // holding must not keep the center indicators revealed behind the panel.
   function setCenterHoverRevealSuppressed(value) {
-    if (root.bar && "centerHoverRevealSuppressed" in root.bar)
+    if (root.bar && typeof root.bar.setCenterHoverRevealSuppressed === "function")
+      root.bar.setCenterHoverRevealSuppressed(value)
+    else if (root.bar && "centerHoverRevealSuppressed" in root.bar)
       root.bar.centerHoverRevealSuppressed = value
   }
 
@@ -156,7 +158,7 @@ Panel {
   function refresh() {
     if (!scriptsAvailable || healthProc.running) return
     root.checking = true
-    healthProc.command = [script("health-check"), "--subnet", root.subnet, "--port", String(root.port)]
+    healthProc.command = [script("health-check"), "--subnet", root.subnetSetting, "--port", String(root.port)]
     healthProc.running = true
   }
 
@@ -809,7 +811,7 @@ Panel {
             width: parent.width
             text: root.settingsUsable
               ? Model.ufwRuleText(root.subnet, root.port)
-              : "Invalid subnet or port setting — Setup / Repair is disabled"
+              : "Set a valid subnet (or use auto with a connected LAN) and port — Setup / Repair is disabled"
             color: root.settingsUsable ? root.dim : root.urgent
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.caption

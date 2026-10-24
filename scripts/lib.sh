@@ -8,7 +8,7 @@
 #
 # Sourced, not executed. Callers are expected to `set -uo pipefail`.
 
-DEFAULT_SUBNET="192.168.100.0/24"
+DEFAULT_SUBNET="auto"
 DEFAULT_PORT="4242"
 UFW_COMMENT="Lan Mouse"
 
@@ -143,6 +143,23 @@ valid_subnet() {
     (( 10#$octet <= 255 )) || return 1
   done
   (( 10#${BASH_REMATCH[5]} <= 32 ))
+}
+
+# Use the connected network on the default-route interface, excluding
+# unrelated bridges. Refuse ambiguous networks instead of guessing an allow
+# rule. An explicit CIDR setting remains available for VPNs or multiple LANs.
+detect_subnet() {
+  local interface network
+  local -a networks=()
+  command -v ip >/dev/null 2>&1 || return 1
+  interface="$(ip -4 route show default 2>/dev/null | awk '{for (i=1;i<NF;i++) if ($i == "dev") {print $(i+1); exit}}')"
+  [[ -n $interface ]] || return 1
+  while read -r network; do
+    valid_subnet "$network" && networks+=("$network")
+  done < <(ip -4 route show dev "$interface" scope link 2>/dev/null | awk '{print $1}' | sort -u)
+  (( ${#networks[@]} == 1 )) || return 1
+  [[ ${networks[0]} != */0 ]] || return 1
+  printf '%s\n' "${networks[0]}"
 }
 
 # Echo the argument when it validates, the default otherwise. Used by

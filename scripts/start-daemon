@@ -80,6 +80,14 @@ if pid="$(tracked_pid)"; then
   exit 0
 fi
 
+# Health may have changed since the panel enabled Start. Check again under
+# the start lock, including callers that invoke this script directly. An
+# existing daemon belongs to its original launcher; never adopt or stop it.
+if [[ -n "$(lan_mouse_daemon_pids)" ]]; then
+  printf 'start-daemon: a Lan Mouse daemon is already running outside this plugin; use Launch GUI to manage it\n' >&2
+  exit 1
+fi
+
 if ! command -v lan-mouse >/dev/null 2>&1; then
   printf 'start-daemon: lan-mouse is not installed\n' >&2
   exit 1

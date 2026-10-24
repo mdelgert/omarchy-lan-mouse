@@ -18,3 +18,6 @@
 # Logs and local previews
 *.log
 preview.local.png
+
+# Python regression checks
+__pycache__/
